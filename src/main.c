@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include <dos.h>
+#include <crt0.h>
 
 #include "lib/dmt/dmt.h"
 
@@ -23,6 +24,12 @@
 #include "palette.h"
 #include "package.h"
 
+
+/* Lock all memory as it is allocated: the audio mixer runs inside the
+ * soundblaster's interrupt handler and touches code, sample data and Lua
+ * objects all over the heap, none of which may be paged out by a DPMI host
+ * using virtual memory (eg. CWSDPMI with a swap file or a Windows DOS box) */
+int _crt0_startup_flags = _CRT0_FLAG_LOCK_MEMORY;
 
 static lua_State *L;
 
