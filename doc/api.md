@@ -21,6 +21,8 @@
 
 ##### [Callbacks](#callbacks-1)
 
+##### [Configuration (conf.lua)](#configuration-conflua)
+
 
 ## Modules
 
@@ -28,6 +30,17 @@
 
 ##### love.getVersion()
 Returns the version of LoveDOS as a string.
+
+##### love.isVersionCompatible(version)
+##### love.isVersionCompatible(major, minor, revision)
+Returns `true` if a game written for the given version of LÖVE can be run.
+LoveDOS implements parts of the LÖVE 0.10 and 11 APIs, so this is `true` for
+`0.10.x` and `11.x`.
+
+##### love.hasDeprecationOutput()
+##### love.setDeprecationOutput(enable)
+Gets and sets whether deprecation warnings are output. LoveDOS doesn't output
+any; these exist for compatibility.
 
 ### love.system
 Provides access to information about the user's system.
@@ -228,7 +241,8 @@ by this function should be used only as a comparison with other values returned
 by this function.
 
 ##### love.timer.step()
-Measures the time between two frames. This is automatically called each frame.
+Measures the time between two frames and returns it. This is automatically
+called each frame.
 
 ##### love.timer.sleep(seconds)
 Pauses the thread for the specified number of `seconds`. During this time no
@@ -260,6 +274,15 @@ should be the value `1` (left), `2` (right) or `3` (middle).
 
 
 ### love.filesystem
+##### love.filesystem.setIdentity(name)
+Sets the save directory: files are written to `save\<name>`, where `<name>`
+is shortened to a valid DOS directory name of up to 8 characters. Without an
+identity (the default) files are written to `save`. The identity is usually
+set in [conf.lua](#configuration-conflua).
+
+##### love.filesystem.getIdentity()
+Returns the identity, or `nil` if none is set.
+
 ##### love.filesystem.mount(path)
 Mounts the given path. `path` should be either a directory or tar archive.
 Returns `nil` and an error message on failure.
@@ -665,6 +688,49 @@ Called when the user releases a mouse button. `x` and `y` are the mouse's
 current position. `button` is the value `1` (left), `2` (right) or `3` (middle).
 
 ##### love.errhand(err)
+##### love.errorhandler(err)
 Called when an unprotected error occurs; `err` is the error message. By default
 this function displays the error message and stacktrace on screen and waits for
-the `escape` key to be pressed before exiting.
+the `escape` key to be pressed before exiting. `love.errorhandler` is the
+LÖVE 11 name and is used if it is defined; like in LÖVE 11 it may return a
+function which is then called repeatedly until it returns a value.
+
+##### love.run()
+The main loop, which calls the other callbacks. It can be replaced by a game:
+either with a function that runs the loop itself (LÖVE 0.10) or, like in
+LÖVE 11, with a function that returns a function to be called once per frame
+until it returns an exit status. Each frame the default loop resets the
+transformation (`love.graphics.origin()`) and clears the screen before calling
+`love.draw()`.
+
+
+## Configuration (conf.lua)
+If the game contains a `conf.lua` file it is run before `main.lua`. It should
+define a `love.conf(t)` function which receives a table of settings with the
+same fields and defaults as in LÖVE; for example:
+
+```lua
+function love.conf(t)
+  t.identity = "mygame"   -- Save directory, see love.filesystem.setIdentity()
+  t.version = "11.4"      -- The LÖVE version the game was written for
+  t.modules.audio = false -- Don't use the audio module
+end
+```
+
+The following fields have an effect in LoveDOS; the others are accepted and
+ignored:
+
+Field              | Effect
+-------------------|-------------------------------------------------------
+`t.identity`       | The save directory, see `love.filesystem.setIdentity()`
+`t.version`        | `"11.0"` or later selects LÖVE 11's color range (below)
+`t.modules.<name>` | `false` removes `love.<name>`. Disabling `audio` also leaves the Sound Blaster untouched, which saves the CPU time used for mixing
+
+#### Colors
+By default colors are given and returned as red, green and blue values from
+`0` to `255`, as in LÖVE 0.10. Games which set `t.version` to `"11.0"` or later
+use values from `0` to `1`, as in LÖVE 11. This applies to
+`love.graphics.setColor()`, `getColor()`, `setBackgroundColor()`,
+`getBackgroundColor()`, `clear()` and `Image:getPixel()`/`setPixel()`. Colors
+can also be given as a table (`{r, g, b}`); an alpha value is accepted and
+ignored, and returned as the maximum (`255` or `1`).

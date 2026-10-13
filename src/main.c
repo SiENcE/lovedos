@@ -65,7 +65,8 @@ int main(int argc, char **argv) {
 
   /* Init everything */
   atexit(deinit);
-  audio_init();
+  /* The audio is initialized by boot.lua (love.audio._init) once conf.lua
+   * has been run, as games may disable it */
   vga_init();
   palette_init();
   keyboard_init();

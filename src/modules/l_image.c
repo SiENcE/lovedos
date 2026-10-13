@@ -7,6 +7,7 @@
 
 #include "luaobj.h"
 #include "palette.h"
+#include "color.h"
 #include "image.h"
 
 
@@ -86,10 +87,7 @@ int l_image_getPixel(lua_State *L) {
     } else {
       int rgb[3];
       palette_idxToColor(idx, rgb);
-      lua_pushinteger(L, rgb[0]);
-      lua_pushinteger(L, rgb[1]);
-      lua_pushinteger(L, rgb[2]);
-      return 3;
+      return color_push(L, rgb);
     }
   }
 }
@@ -105,13 +103,7 @@ int l_image_setPixel(lua_State *L) {
     image_setMaskPixel(self, x, y, 0xff);
   } else {
     /* Get color, set pixel and mask */
-    int r = luaL_checknumber(L, 4);
-    int g = luaL_checknumber(L, 5);
-    int b = luaL_checknumber(L, 6);
-    int idx = palette_colorToIdx(r, g, b);
-    if (idx < -1) {
-      luaL_error(L, "color palette exhausted: use fewer unique colors");
-    }
+    int idx = color_check(L, 4, NULL, NULL);
     image_setPixel(self, x, y, idx);
     image_setMaskPixel(self, x, y, 0x0);
   }

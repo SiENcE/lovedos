@@ -8,6 +8,7 @@
 #include <string.h>
 #include "lib/cmixer/cmixer.h"
 #include "spatial.h"
+#include "audio.h"
 #include "luaobj.h"
 
 
@@ -245,8 +246,16 @@ int l_audio_getDopplerScale(lua_State *L) {
 }
 
 
+int l_audio_init(lua_State *L) {
+  /* Internal: called once by boot.lua if the audio module is enabled */
+  audio_init();
+  return 0;
+}
+
+
 int luaopen_audio(lua_State *L) {
   luaL_Reg reg[] = {
+    { "_init",                l_audio_init                  },
     { "newSource",            l_source_new                  },
     { "play",                 l_audio_play                  },
     { "pause",                l_audio_pause                 },

@@ -41,7 +41,8 @@ int l_timer_step(lua_State *L) {
     timer_avgAcc = 0;
     timer_avgCount = 0;
   }
-  return 0;
+  lua_pushnumber(L, timer_lastDt);
+  return 1;
 }
 
 

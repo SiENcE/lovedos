@@ -11,6 +11,7 @@
 #include <math.h>
 #include <pc.h>
 #include "palette.h"
+#include "color.h"
 #include "image.h"
 #include "font.h"
 #include "quad.h"
@@ -90,34 +91,12 @@ static int checkMode(lua_State *L, int idx) {
 
 
 static int getColorFromArgs(lua_State *L, int *rgb, const int *def) {
-  int r, g, b;
-  if ( lua_isnoneornil(L, 1) ) {
-    r = def[0];
-    g = def[1];
-    b = def[2];
-  } else {
-    r = luaL_checknumber(L, 1);
-    g = luaL_checknumber(L, 2);
-    b = luaL_checknumber(L, 3);
-  }
-  int idx = palette_colorToIdx(r, g, b);
-  if (idx < 0) {
-    luaL_error(L, "color palette exhausted: use fewer unique colors");
-  }
-  if (rgb) {
-    rgb[0] = r;
-    rgb[1] = g;
-    rgb[2] = b;
-  }
-  return idx;
+  return color_check(L, 1, def, rgb);
 }
 
 
 static int pushColor(lua_State *L, int *rgb) {
-  lua_pushinteger(L, rgb[0]);
-  lua_pushinteger(L, rgb[1]);
-  lua_pushinteger(L, rgb[2]);
-  return 3;
+  return color_push(L, rgb);
 }
 
 
@@ -882,6 +861,14 @@ int l_graphics_getScissor(lua_State *L) {
 
 
 
+int l_graphics_setColorRange(lua_State *L) {
+  /* Internal: called by boot.lua with 1 for LÖVE 11 games, else 255 */
+  double max = luaL_checknumber(L, 1);
+  color_setRange(max == 1 ? 1 : 255);
+  return 0;
+}
+
+
 int l_image_new(lua_State *L);
 int l_image_newCanvas(lua_State *L);
 int l_quad_new(lua_State *L);
@@ -889,6 +876,7 @@ int l_font_new(lua_State *L);
 
 int luaopen_graphics(lua_State *L) {
   luaL_Reg reg[] = {
+    { "_setColorRange",     l_graphics_setColorRange      },
     { "getDimensions",      l_graphics_getDimensions      },
     { "getWidth",           l_graphics_getWidth           },
     { "getHeight",          l_graphics_getHeight          },
