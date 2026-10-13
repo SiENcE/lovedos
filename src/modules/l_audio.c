@@ -5,7 +5,9 @@
  * under the terms of the MIT license. See LICENSE for details.
  */
 
+#include <string.h>
 #include "lib/cmixer/cmixer.h"
+#include "spatial.h"
 #include "luaobj.h"
 
 
@@ -20,6 +22,12 @@ int l_source_stop(lua_State *L);
 int l_source_rewind(lua_State *L);
 int l_source_isPlaying(lua_State *L);
 void l_source_pushActive(lua_State *L);
+void l_source_updateAll(void);
+
+static const char *distanceModels[] = {
+  "none", "inverse", "inverseclamped", "linear", "linearclamped", "exponent",
+  "exponentclamped", NULL
+};
 
 
 static int callSourceFn(lua_State *L, lua_CFunction fn, int idx) {
@@ -135,6 +143,108 @@ int l_audio_getVolume(lua_State *L) {
 }
 
 
+static void checkVec3(lua_State *L, int idx, spatial_vec3_t *v) {
+  v->x = luaL_checknumber(L, idx);
+  v->y = luaL_checknumber(L, idx + 1);
+  v->z = luaL_optnumber(L, idx + 2, 0);
+}
+
+
+static int pushVec3(lua_State *L, spatial_vec3_t *v) {
+  lua_pushnumber(L, v->x);
+  lua_pushnumber(L, v->y);
+  lua_pushnumber(L, v->z);
+  return 3;
+}
+
+
+int l_audio_setPosition(lua_State *L) {
+  checkVec3(L, 1, &spatial_listener.position);
+  l_source_updateAll();
+  return 0;
+}
+
+
+int l_audio_getPosition(lua_State *L) {
+  return pushVec3(L, &spatial_listener.position);
+}
+
+
+int l_audio_setVelocity(lua_State *L) {
+  checkVec3(L, 1, &spatial_listener.velocity);
+  l_source_updateAll();
+  return 0;
+}
+
+
+int l_audio_getVelocity(lua_State *L) {
+  return pushVec3(L, &spatial_listener.velocity);
+}
+
+
+int l_audio_setOrientation(lua_State *L) {
+  int i;
+  for (i = 1; i <= 6; i++) luaL_checknumber(L, i);
+  spatial_listener.forward.x = lua_tonumber(L, 1);
+  spatial_listener.forward.y = lua_tonumber(L, 2);
+  spatial_listener.forward.z = lua_tonumber(L, 3);
+  spatial_listener.up.x = lua_tonumber(L, 4);
+  spatial_listener.up.y = lua_tonumber(L, 5);
+  spatial_listener.up.z = lua_tonumber(L, 6);
+  l_source_updateAll();
+  return 0;
+}
+
+
+int l_audio_getOrientation(lua_State *L) {
+  pushVec3(L, &spatial_listener.forward);
+  return pushVec3(L, &spatial_listener.up) + 3;
+}
+
+
+int l_audio_setDistanceModel(lua_State *L) {
+  /* Also accept LÖVE 11 names which use spaces ("inverse clamped") */
+  char buf[32];
+  const char *name = luaL_checkstring(L, 1);
+  int i, j;
+  for (i = j = 0; name[i] && j < (int) sizeof(buf) - 1; i++) {
+    if (name[i] != ' ') buf[j++] = name[i];
+  }
+  buf[j] = '\0';
+  for (i = 0; distanceModels[i]; i++) {
+    if (!strcmp(buf, distanceModels[i])) {
+      spatial_listener.distanceModel = i;
+      l_source_updateAll();
+      return 0;
+    }
+  }
+  return luaL_argerror(L, 1, "invalid distance model");
+}
+
+
+int l_audio_getDistanceModel(lua_State *L) {
+  lua_pushstring(L, distanceModels[spatial_listener.distanceModel]);
+  return 1;
+}
+
+
+int l_audio_setDopplerScale(lua_State *L) {
+  double n = luaL_checknumber(L, 1);
+  if (n < 0) {
+    luaL_argerror(L, 1, "doppler scale must not be negative");
+  }
+  spatial_listener.dopplerScale = n;
+  l_source_updateAll();
+  return 0;
+}
+
+
+int l_audio_getDopplerScale(lua_State *L) {
+  lua_pushnumber(L, spatial_listener.dopplerScale);
+  return 1;
+}
+
+
 int luaopen_audio(lua_State *L) {
   luaL_Reg reg[] = {
     { "newSource",            l_source_new                  },
@@ -148,6 +258,16 @@ int luaopen_audio(lua_State *L) {
     { "getActiveSources",     l_audio_getActiveSources      },
     { "setVolume",            l_audio_setVolume             },
     { "getVolume",            l_audio_getVolume             },
+    { "setPosition",          l_audio_setPosition           },
+    { "getPosition",          l_audio_getPosition           },
+    { "setVelocity",          l_audio_setVelocity           },
+    { "getVelocity",          l_audio_getVelocity           },
+    { "setOrientation",       l_audio_setOrientation        },
+    { "getOrientation",       l_audio_getOrientation        },
+    { "setDistanceModel",     l_audio_setDistanceModel      },
+    { "getDistanceModel",     l_audio_getDistanceModel      },
+    { "setDopplerScale",      l_audio_setDopplerScale       },
+    { "getDopplerScale",      l_audio_getDopplerScale       },
     { 0, 0 },
   };
   luaL_newlib(L, reg);
