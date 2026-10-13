@@ -69,6 +69,7 @@ int luaopen_sounddata(lua_State *L);
 int luaopen_spritebatch(lua_State *L);
 int luaopen_text(lua_State *L);
 int luaopen_randomgenerator(lua_State *L);
+int luaopen_decoder(lua_State *L);
 int luaopen_lovemath(lua_State *L);
 int luaopen_joystick(lua_State *L);
 int luaopen_system(lua_State *L);
@@ -95,6 +96,7 @@ int luaopen_love(lua_State *L) {
     luaopen_spritebatch,
     luaopen_text,
     luaopen_randomgenerator,
+    luaopen_decoder,
     NULL,
   };
   for (i = 0; classes[i]; i++) {

@@ -46,3 +46,15 @@ void audio_deinit(void) {
 int audio_isInitialized(void) {
   return audio_initialized;
 }
+
+
+int audio_lockMixer(void) {
+  /* Keeps the mixer (interrupt) from running; returns the value to pass to
+   * audio_unlockMixer() */
+  return disable();
+}
+
+
+void audio_unlockMixer(int wasEnabled) {
+  if (wasEnabled) enable();
+}

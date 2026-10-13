@@ -34,6 +34,7 @@ struct mount_t {
   int (*getInfo)(mount_t *mnt, const char *filename, filesystem_info_t *info);
   void (*list)(mount_t *mnt, const char *dir, filesystem_listCallback cb,
                void *udata);
+  FILE *(*open)(mount_t *mnt, const char *filename, long *start, long *size);
   void *udata;
   char path[MAX_PATH];
 };
@@ -240,6 +241,20 @@ static void dir_list(mount_t *mnt, const char *dir,
 }
 
 
+static FILE *dir_open(mount_t *mnt, const char *filename, long *start,
+                      long *size) {
+  char buf[MAX_PATH];
+  FILE *fp;
+  if (concat_path(buf, mnt->path, filename)) return NULL;
+  fp = fopen(buf, "rb");
+  if (!fp) return NULL;
+  fseek(fp, 0, SEEK_END);
+  *size = ftell(fp);
+  *start = 0;
+  return fp;
+}
+
+
 static void* dir_read(mount_t *mnt, const char *filename, int *size) {
   char buf[MAX_PATH];
   /* Make fullpath */
@@ -283,6 +298,7 @@ static int dir_mount(mount_t *mnt, const char *path) {
   mnt->read = dir_read;
   mnt->getInfo = dir_getInfo;
   mnt->list = dir_list;
+  mnt->open = dir_open;
 
   /* Return ok */
   return FILESYSTEM_ESUCCESS;
@@ -431,6 +447,23 @@ static void tar_list(mount_t *mnt, const char *dir,
 }
 
 
+static FILE *tar_open(mount_t *mnt, const char *filename, long *start,
+                      long *size) {
+  /* Opens the archive a second time, so the stream doesn't interfere with
+   * (or depend on) the mount's own file */
+  tar_mount_t *tm = mnt->udata;
+  mtar_header_t h;
+  FILE *fp;
+  if (tar_find(mnt, filename, &h) || h.type != MTAR_TREG) return NULL;
+  fp = fopen(mnt->path, "rb");
+  if (!fp) return NULL;
+  /* The file's data follows its 512 byte header */
+  *start = tm->offset + tm->tar.last_header + 512;
+  *size = h.size;
+  return fp;
+}
+
+
 static int tar_stream_read(mtar_t *tar, void *data, unsigned size) {
   tar_mount_t *tm = tar->stream;
   unsigned res = fread(data, 1, size, tm->fp);
@@ -528,6 +561,7 @@ static int tar_mount(mount_t *mnt, const char *path) {
   mnt->read = tar_read;
   mnt->getInfo = tar_getInfo;
   mnt->list = tar_list;
+  mnt->open = tar_open;
 
   /* Return ok */
   return FILESYSTEM_ESUCCESS;
@@ -734,6 +768,61 @@ int filesystem_createDirectory(const char *path) {
   int err = write_path(buf, path);
   if (err) return err;
   return make_dirs(buf);
+}
+
+
+struct filesystem_file_t {
+  FILE *fp;
+  long start, size, pos;
+};
+
+
+filesystem_file_t *filesystem_open(const char *filename) {
+  /* Opens a file for streaming (reading parts of it) */
+  FOREACH_MOUNT(mnt) {
+    if (mnt->exists(mnt, filename) && mnt->isFile(mnt, filename)) {
+      long start, size;
+      FILE *fp = mnt->open(mnt, filename, &start, &size);
+      filesystem_file_t *f;
+      if (!fp) return NULL;
+      f = dmt_calloc(1, sizeof(*f));
+      f->fp = fp;
+      f->start = start;
+      f->size = size;
+      return f;
+    }
+  }
+  return NULL;
+}
+
+
+int filesystem_fread(filesystem_file_t *f, void *buf, int n) {
+  /* Reads up to `n` bytes at the current position; returns the number read */
+  int res;
+  if (n > f->size - f->pos) n = f->size - f->pos;
+  if (n <= 0) return 0;
+  if (fseek(f->fp, f->start + f->pos, SEEK_SET)) return 0;
+  res = fread(buf, 1, n, f->fp);
+  f->pos += res;
+  return res;
+}
+
+
+int filesystem_fseek(filesystem_file_t *f, long pos) {
+  if (pos < 0 || pos > f->size) return FILESYSTEM_EFAILURE;
+  f->pos = pos;
+  return FILESYSTEM_ESUCCESS;
+}
+
+
+long filesystem_fsize(filesystem_file_t *f) {
+  return f->size;
+}
+
+
+void filesystem_fclose(filesystem_file_t *f) {
+  fclose(f->fp);
+  dmt_free(f);
 }
 
 

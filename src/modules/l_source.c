@@ -7,8 +7,11 @@
 
 #include <string.h>
 #include "lib/cmixer/cmixer.h"
+#include "lib/dmt/dmt.h"
 #include "audio.h"
 #include "sounddata.h"
+#include "decoder.h"
+#include "filesystem.h"
 #include "spatial.h"
 #include "luaobj.h"
 
@@ -23,9 +26,31 @@
 #define CLAMP(x, a, b) ((x) < (a) ? (a) : (x) > (b) ? (b) : (x))
 
 
-enum { SOURCE_STATIC, SOURCE_STREAM };
+enum { SOURCE_STATIC, SOURCE_STREAM, SOURCE_QUEUE };
 
-static const char *sourceTypes[] = { "static", "stream", NULL };
+static const char *sourceTypes[] = { "static", "stream", "queue", NULL };
+static const char *newSourceTypes[] = { "static", "stream", NULL };
+
+/* "stream" sources from files at least this large are streamed from disk */
+#define STREAM_MIN_SIZE   (256 * 1024)
+#define STREAM_CHUNK_SIZE 16384
+#define STREAM_BUFFERS    4
+#define QUEUE_SLOTS       16
+#define QUEUE_DEFAULT     8
+
+
+/* A ring of sounddata buffers for queueable sources and sources streamed from
+ * disk. The mixer (interrupt) reads at `head`, the main program adds buffers
+ * at `tail`; with only one reader and one writer no locking is needed */
+typedef struct {
+  sounddata_t *slots[QUEUE_SLOTS];
+  volatile int head, tail;
+  volatile int readPos;     /* Frame within slots[head] */
+  volatile int starved;     /* Set by the mixer when it ran out of data */
+  int size;                 /* Number of usable buffers */
+  int bitdepth;
+  decoder_t *decoder;       /* Set for sources streamed from disk */
+} queue_t;
 static const char *timeUnits[] = { "seconds", "samples", NULL };
 
 
@@ -33,7 +58,10 @@ typedef struct source_t source_t;
 
 struct source_t {
   cm_Source *source;
-  sounddata_t *data;
+  sounddata_t *data;  /* For sources in memory */
+  queue_t *queue;     /* For queueable and streamed sources */
+  char *filename;     /* For streamed sources, so they can be cloned */
+  int samplerate, channels, length;
   int idx;            /* Read position of the stream; used by the mixer */
   int type;
   int looping;
@@ -87,6 +115,91 @@ static void stream_handler(cm_Event *e) {
 }
 
 
+static void queue_handler(cm_Event *e) {
+  /* Feeds the mixer from a source's buffer queue; called from inside the
+   * soundblaster's interrupt handler. Silence is output when the queue is
+   * empty. Rewinding and seeking are done by the main program */
+  source_t *self = e->udata;
+  queue_t *q = self->queue;
+  cm_Int16 *dst;
+  int len, n;
+
+  if (e->type != CM_EVENT_SAMPLES) return;
+  dst = e->buffer;
+  len = e->length / 2;
+  while (len > 0) {
+    sounddata_t *data;
+    if (q->head == q->tail) {
+      memset(dst, 0, len * 2 * sizeof(*dst));
+      q->starved = 1;
+      break;
+    }
+    data = q->slots[q->head];
+    n = data->length - q->readPos;
+    n = n < len ? n : len;
+    sounddata_readStereo(data, q->readPos, n, dst);
+    dst += n * 2;
+    len -= n;
+    q->readPos += n;
+    if (q->readPos >= data->length) {
+      q->readPos = 0;
+      q->head = (q->head + 1) % QUEUE_SLOTS;
+    }
+  }
+}
+
+
+static int queue_used(queue_t *q) {
+  return (q->tail - q->head + QUEUE_SLOTS) % QUEUE_SLOTS;
+}
+
+
+static int queue_push(queue_t *q, sounddata_t *data) {
+  /* Takes ownership of `data`; returns 0 if the queue is full */
+  if (queue_used(q) >= q->size) return 0;
+  /* The slot was used before and has been consumed by the mixer */
+  if (q->slots[q->tail]) sounddata_release(q->slots[q->tail]);
+  q->slots[q->tail] = data;
+  q->tail = (q->tail + 1) % QUEUE_SLOTS;
+  return 1;
+}
+
+
+static void queue_clear(queue_t *q) {
+  int i, lock = audio_lockMixer();
+  q->head = q->tail = 0;
+  q->readPos = 0;
+  q->starved = 0;
+  for (i = 0; i < QUEUE_SLOTS; i++) {
+    if (q->slots[i]) sounddata_release(q->slots[i]);
+    q->slots[i] = NULL;
+  }
+  audio_unlockMixer(lock);
+}
+
+
+static void queue_free(queue_t *q) {
+  queue_clear(q);
+  if (q->decoder) decoder_close(q->decoder);
+  dmt_free(q);
+}
+
+
+static void refill(source_t *self) {
+  /* Decodes chunks of a streamed source into its free buffers. Like other
+   * mixer streams it loops, the mixer decides when the source ends */
+  queue_t *q = self->queue;
+  while (q->decoder && queue_used(q) < q->size) {
+    sounddata_t *data;
+    if (decoder_decode(q->decoder, &data) || !data) {
+      decoder_seek(q->decoder, 0);
+      if (decoder_decode(q->decoder, &data) || !data) return;
+    }
+    queue_push(q, data);
+  }
+}
+
+
 static void updateParams(source_t *self) {
   /* Applies volume, pitch and the (cached) positional audio results to the
    * mixer source */
@@ -100,7 +213,7 @@ static void updateParams(source_t *self) {
 static void updateSpatial(source_t *self) {
   /* Recalculates the positional audio of mono sources; only needed when the
    * source's or the listener's positional settings change */
-  if (self->data->channels == 1) {
+  if (self->channels == 1) {
     spatial_compute(&self->spatial, &self->spatialGain, &self->spatialPan,
                     &self->spatialPitch);
   }
@@ -134,12 +247,18 @@ static source_t *newSource(lua_State *L) {
 
 
 static void initSource(lua_State *L, source_t *self) {
-  /* Creates the mixer source for the source's (already set) sounddata */
+  /* Creates the mixer source for the source's (already set) sounddata or
+   * queue */
   cm_SourceInfo info;
-  info.handler = stream_handler;
+  if (self->data) {
+    self->samplerate = self->data->samplerate;
+    self->channels = self->data->channels;
+    self->length = self->data->length;
+  }
+  info.handler = self->queue ? queue_handler : stream_handler;
   info.udata = self;
-  info.samplerate = self->data->samplerate;
-  info.length = self->data->length;
+  info.samplerate = self->samplerate;
+  info.length = self->length;
   self->source = cm_new_source(&info);
   if (!self->source) {
     luaL_error(L, "%s", cm_get_error());
@@ -154,23 +273,87 @@ static void initSource(lua_State *L, source_t *self) {
 }
 
 
+static void openStream(lua_State *L, source_t *self, const char *filename) {
+  /* Sets the source up to be streamed from the file */
+  queue_t *q;
+  decoder_t *dec;
+  const char *err = decoder_open(&dec, filename, STREAM_CHUNK_SIZE);
+  if (err) luaL_error(L, "%s", err);
+  q = dmt_calloc(1, sizeof(*q));
+  q->size = STREAM_BUFFERS;
+  q->decoder = dec;
+  q->bitdepth = dec->bitdepth;
+  self->queue = q;
+  self->filename = dmt_malloc(strlen(filename) + 1);
+  strcpy(self->filename, filename);
+  self->samplerate = dec->samplerate;
+  self->channels = dec->channels;
+  self->length = dec->length;
+  refill(self);
+}
+
+
 sounddata_t *l_sounddata_toSoundData(lua_State *L, int idx);
+const char *l_decoder_getFilename(lua_State *L, int idx);
 
 int l_source_new(lua_State *L) {
+  /* newSource(filename [, type]), newSource(soundData) or
+   * newSource(decoder [, type]) */
   sounddata_t *data = l_sounddata_toSoundData(L, 1);
-  const char *filename = data ? NULL : luaL_checkstring(L, 1);
-  int type = luaL_checkoption(L, 2, "stream", sourceTypes);
-  const char *err;
+  const char *decoderFile = l_decoder_getFilename(L, 1);
+  const char *filename = data || decoderFile ? NULL : luaL_checkstring(L, 1);
+  int type = luaL_checkoption(L, 2, "stream", newSourceTypes);
+  const char *err = NULL;
+  filesystem_info_t info;
   source_t *self = newSource(L);
   if (data) {
     /* Like LÖVE, the source gets its own copy of the SoundData */
     self->type = SOURCE_STATIC;
     err = sounddata_clone(&self->data, data);
+  } else if (decoderFile) {
+    self->type = SOURCE_STREAM;
+    openStream(L, self, decoderFile);
   } else {
     self->type = type;
-    err = sounddata_newFromFile(&self->data, filename);
+    if (type == SOURCE_STREAM && filesystem_getInfo(filename, &info) >= 0 &&
+        info.size >= STREAM_MIN_SIZE) {
+      openStream(L, self, filename);
+    } else {
+      err = sounddata_newFromFile(&self->data, filename);
+    }
   }
   if (err) luaL_error(L, "%s", err);
+  initSource(L, self);
+  return 1;
+}
+
+
+int l_source_newQueueable(lua_State *L) {
+  /* newQueueableSource(samplerate, bitdepth, channels [, buffercount]) */
+  int rate = luaL_checkinteger(L, 1);
+  int bits = luaL_checkinteger(L, 2);
+  int channels = luaL_checkinteger(L, 3);
+  int count = luaL_optinteger(L, 4, 0);
+  source_t *self;
+  queue_t *q;
+  if (rate <= 0) luaL_argerror(L, 1, "invalid sample rate");
+  if (bits != 8 && bits != 16) luaL_argerror(L, 2, "bit depth must be 8 or 16");
+  if (channels != 1 && channels != 2) {
+    luaL_argerror(L, 3, "channel count must be 1 or 2");
+  }
+  if (count <= 0) count = QUEUE_DEFAULT;
+  if (count > QUEUE_SLOTS - 1) count = QUEUE_SLOTS - 1;
+  self = newSource(L);
+  self->type = SOURCE_QUEUE;
+  q = dmt_calloc(1, sizeof(*q));
+  q->size = count;
+  q->bitdepth = bits;
+  self->queue = q;
+  self->samplerate = rate;
+  self->channels = channels;
+  /* The mixer needs a length; queueable sources stop when they run out of
+   * buffers instead */
+  self->length = 0x7fffffff;
   initSource(L, self);
   return 1;
 }
@@ -186,6 +369,8 @@ int l_source_gc(lua_State *L) {
     cm_destroy_source(self->source);
   }
   if (self->data) sounddata_release(self->data);
+  if (self->queue) queue_free(self->queue);
+  if (self->filename) dmt_free(self->filename);
   return 0;
 }
 
@@ -231,7 +416,11 @@ void l_source_pushActive(lua_State *L) {
 
 int l_source_clone(lua_State *L) {
   source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
-  source_t *clone = newSource(L);
+  source_t *clone;
+  if (self->type == SOURCE_QUEUE) {
+    luaL_error(L, "queueable sources can't be cloned");
+  }
+  clone = newSource(L);
   clone->type = self->type;
   clone->looping = self->looping;
   clone->volume = self->volume;
@@ -239,8 +428,12 @@ int l_source_clone(lua_State *L) {
   clone->maxVolume = self->maxVolume;
   clone->pitch = self->pitch;
   clone->spatial = self->spatial;
-  clone->data = self->data;
-  sounddata_retain(clone->data);
+  if (self->data) {
+    clone->data = self->data;
+    sounddata_retain(clone->data);
+  } else {
+    openStream(L, clone, self->filename);
+  }
   initSource(L, clone);
   return 1;
 }
@@ -281,17 +474,48 @@ int l_source_resume(lua_State *L) {
 }
 
 
+static void seekStream(source_t *self, int frame) {
+  /* Restarts decoding a streamed source at the mixer block containing
+   * `frame` (see cm_seek()) */
+  int block = frame - frame % 128;
+  queue_clear(self->queue);
+  decoder_seek(self->queue->decoder, block);
+  refill(self);
+}
+
+
 int l_source_stop(lua_State *L) {
   source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
   cm_stop(self->source);
   setActive(L, 1, 0);
+  if (self->queue) {
+    /* Stopping clears a queueable source's queue and rewinds a stream */
+    queue_clear(self->queue);
+    if (self->queue->decoder) seekStream(self, 0);
+  }
   return 0;
+}
+
+
+static void seek(source_t *self, int frame) {
+  if (self->type == SOURCE_QUEUE) return;
+  if (self->queue) {
+    /* Pause while the stream is refilled so the mixer neither reads stale
+     * buffers nor runs ahead of the data */
+    int playing = cm_get_state(self->source) == CM_STATE_PLAYING;
+    if (playing) cm_pause(self->source);
+    seekStream(self, frame);
+    cm_seek(self->source, frame);
+    if (playing) cm_play(self->source);
+  } else {
+    cm_seek(self->source, frame);
+  }
 }
 
 
 int l_source_rewind(lua_State *L) {
   source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
-  cm_seek(self->source, 0);
+  seek(self, 0);
   return 0;
 }
 
@@ -301,13 +525,12 @@ int l_source_seek(lua_State *L) {
   double offset = luaL_checknumber(L, 2);
   int unit = luaL_checkoption(L, 3, "seconds", timeUnits);
   if (unit == 0) {
-    offset *= self->data->samplerate;
+    offset *= self->samplerate;
   }
   if (offset < 0) {
     luaL_argerror(L, 2, "offset must not be negative");
   }
-  cm_seek(self->source, offset < self->data->length ? offset
-                                                     : self->data->length);
+  seek(self, offset < self->length ? offset : self->length);
   return 0;
 }
 
@@ -317,7 +540,7 @@ int l_source_tell(lua_State *L) {
   int unit = luaL_checkoption(L, 2, "seconds", timeUnits);
   int frame = cm_tell(self->source);
   if (unit == 0) {
-    lua_pushnumber(L, frame / (double) self->data->samplerate);
+    lua_pushnumber(L, frame / (double) self->samplerate);
   } else {
     lua_pushinteger(L, frame);
   }
@@ -329,9 +552,13 @@ int l_source_getDuration(lua_State *L) {
   source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
   int unit = luaL_checkoption(L, 2, "seconds", timeUnits);
   if (unit == 0) {
-    lua_pushnumber(L, self->data->length / (double) self->data->samplerate);
+    if (self->type == SOURCE_QUEUE) {
+      lua_pushnumber(L, -1);
+      return 1;
+    }
+    lua_pushnumber(L, self->length / (double) self->samplerate);
   } else {
-    lua_pushinteger(L, self->data->length);
+    lua_pushinteger(L, self->type == SOURCE_QUEUE ? -1 : self->length);
   }
   return 1;
 }
@@ -440,14 +667,69 @@ int l_source_getType(lua_State *L) {
 
 int l_source_getChannelCount(lua_State *L) {
   source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
-  lua_pushinteger(L, self->data->channels);
+  lua_pushinteger(L, self->channels);
   return 1;
+}
+
+
+int l_source_queue(lua_State *L) {
+  /* queue(sounddata): adds a copy of the sound data to a queueable source's
+   * queue. Returns false if there is no free buffer */
+  source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
+  sounddata_t *data = l_sounddata_toSoundData(L, 2), *copy;
+  const char *err;
+  if (self->type != SOURCE_QUEUE) {
+    luaL_error(L, "only queueable sources can be queued");
+  }
+  if (!data) luaL_argerror(L, 2, "expected SoundData");
+  if (data->samplerate != self->samplerate ||
+      data->bitdepth != self->queue->bitdepth ||
+      data->channels != self->channels) {
+    luaL_error(L, "the sound data's format doesn't match the source's");
+  }
+  if (queue_used(self->queue) >= self->queue->size) {
+    lua_pushboolean(L, 0);
+    return 1;
+  }
+  err = sounddata_clone(&copy, data);
+  if (err) luaL_error(L, "%s", err);
+  queue_push(self->queue, copy);
+  self->queue->starved = 0;
+  lua_pushboolean(L, 1);
+  return 1;
+}
+
+
+int l_source_getFreeBufferCount(lua_State *L) {
+  source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
+  if (self->type != SOURCE_QUEUE) {
+    lua_pushinteger(L, 0);
+  } else {
+    lua_pushinteger(L, self->queue->size - queue_used(self->queue));
+  }
+  return 1;
+}
+
+
+void l_source_updateStreams(void) {
+  /* Called once per frame: refills sources streamed from disk and stops
+   * queueable sources which ran out of buffers, as LÖVE does */
+  source_t *s;
+  for (s = sources; s; s = s->next) {
+    if (!s->queue) continue;
+    if (s->queue->decoder) {
+      refill(s);
+    } else if (s->queue->starved && queue_used(s->queue) == 0 &&
+               cm_get_state(s->source) == CM_STATE_PLAYING) {
+      cm_stop(s->source);
+    }
+  }
 }
 
 
 static source_t *checkMono(lua_State *L) {
   source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
-  if (self->data->channels != 1) {
+  if (self->channels != 1) {
     luaL_error(L, "positional audio is only available for mono sources");
   }
   return self;
@@ -629,6 +911,8 @@ int luaopen_source(lua_State *L) {
     { "getAttenuationDistances", l_source_getAttenuationDistances },
     { "setRolloff",       l_source_setRolloff       },
     { "getRolloff",       l_source_getRolloff       },
+    { "queue",            l_source_queue            },
+    { "getFreeBufferCount", l_source_getFreeBufferCount },
     { 0, 0 },
   };
   luaobj_newclass(L, CLASS_NAME, NULL, l_source_new, reg);

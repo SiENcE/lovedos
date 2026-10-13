@@ -9,10 +9,12 @@
 
 
 int l_sounddata_new(lua_State *L);
+int l_decoder_new(lua_State *L);
 
 int luaopen_sound(lua_State *L) {
   luaL_Reg reg[] = {
     { "newSoundData", l_sounddata_new },
+    { "newDecoder",   l_decoder_new   },
     { 0, 0 },
   };
   luaL_newlib(L, reg);

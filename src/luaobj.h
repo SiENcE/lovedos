@@ -30,6 +30,7 @@ typedef struct {
 #define LUAOBJ_TYPE_SPRITEBATCH (1 << 5)
 #define LUAOBJ_TYPE_TEXT   (1 << 6)
 #define LUAOBJ_TYPE_RANDOMGENERATOR (1 << 7)
+#define LUAOBJ_TYPE_DECODER (1 << 8)
 
 
 int luaobj_newclass(lua_State *L, const char *name, const char *extends,

@@ -46,6 +46,14 @@ int l_sounddata_new(lua_State *L) {
 }
 
 
+int l_sounddata_push(lua_State *L, sounddata_t *data) {
+  /* Pushes a new SoundData object which takes ownership of `data` */
+  l_sounddata_t *self = newSoundData(L);
+  self->data = data;
+  return 1;
+}
+
+
 sounddata_t *l_sounddata_toSoundData(lua_State *L, int idx) {
   /* Returns the sounddata of the SoundData object at the given index, or NULL
    * if the value is not a SoundData object */

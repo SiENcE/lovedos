@@ -24,6 +24,8 @@ int l_source_rewind(lua_State *L);
 int l_source_isPlaying(lua_State *L);
 void l_source_pushActive(lua_State *L);
 void l_source_updateAll(void);
+void l_source_updateStreams(void);
+int l_source_newQueueable(lua_State *L);
 
 static const char *distanceModels[] = {
   "none", "inverse", "inverseclamped", "linear", "linearclamped", "exponent",
@@ -253,9 +255,18 @@ int l_audio_init(lua_State *L) {
 }
 
 
+int l_audio_update(lua_State *L) {
+  /* Internal: called once per frame (on love.event.pump) to refill streams */
+  l_source_updateStreams();
+  return 0;
+}
+
+
 int luaopen_audio(lua_State *L) {
   luaL_Reg reg[] = {
     { "_init",                l_audio_init                  },
+    { "_update",              l_audio_update                },
+    { "newQueueableSource",   l_source_newQueueable         },
     { "newSource",            l_source_new                  },
     { "play",                 l_audio_play                  },
     { "pause",                l_audio_pause                 },

@@ -31,6 +31,7 @@ typedef struct {
 } filesystem_info_t;
 
 typedef void (*filesystem_listCallback)(void *udata, const char *name);
+typedef struct filesystem_file_t filesystem_file_t;
 
 enum {
   FILESYSTEM_TNONE,
@@ -56,5 +57,10 @@ int filesystem_getInfo(const char *filename, filesystem_info_t *info);
 const char *filesystem_getRealDirectory(const char *filename);
 void filesystem_list(const char *dir, filesystem_listCallback cb, void *udata);
 const char *filesystem_getWriteDir(void);
+filesystem_file_t *filesystem_open(const char *filename);
+int filesystem_fread(filesystem_file_t *f, void *buf, int n);
+int filesystem_fseek(filesystem_file_t *f, long pos);
+long filesystem_fsize(filesystem_file_t *f);
+void filesystem_fclose(filesystem_file_t *f);
 
 #endif

@@ -28,6 +28,7 @@
 * [Transform](#transform)
 * [Source](#source)
 * [SoundData](#sounddata)
+* [Decoder](#decoder)
 
 ##### [Callbacks](#callbacks-1)
 
@@ -419,12 +420,25 @@ source does not need to be kept in a variable for it to play to its end.
 
 ##### love.audio.newSource(filename [, type])
 ##### love.audio.newSource(soundData)
+##### love.audio.newSource(decoder)
 Creates and returns a new audio source. `filename` should be the filename of
 the `.wav` file to load; 8 and 16 bit PCM files in mono or stereo with any
 sample rate are supported. `type` can be `"static"` or `"stream"` (the
-default); as all audio is loaded into memory this only affects the value
-returned by `Source:getType()`. If a `SoundData` is passed a `"static"` source
-is created which plays a copy of the sound data.
+default). `"stream"` sources from files of 256KB or more are streamed from
+disk while they play, so long music doesn't have to fit into memory; other
+sources are loaded into memory. If a `SoundData` is passed a `"static"` source
+is created which plays a copy of the sound data; a [Decoder](#decoder) creates
+a streamed source of its file.
+
+Streamed sources are refilled once per frame (by `love.event.pump()`) and
+hold about 1.5 seconds of audio (at 22050Hz, 16 bit, mono), so frames
+shouldn't take longer than that while they play.
+
+##### love.audio.newQueueableSource(samplerate, bitdepth, channels [, buffercount])
+Creates a source which plays the [SoundData](#sounddata) queued with
+`Source:queue()`, for example generated audio. It has up to `buffercount`
+(by default 8, at most 15) buffers and stops playing when it runs out of
+data.
 
 ##### love.audio.play(source, ...)
 Plays the given sources. Each argument can either be a source or a table
@@ -506,6 +520,10 @@ Provides functions for creating and loading raw audio data.
 ##### love.sound.newSoundData(filename)
 Loads the `.wav` file `filename` and returns its audio data as a new
 `SoundData`.
+
+##### love.sound.newDecoder(filename [, buffersize])
+Returns a new [Decoder](#decoder) which reads a `.wav` file in chunks of
+`buffersize` bytes (16384 by default).
 
 ##### love.sound.newSoundData(samples [, rate, bits, channels])
 Creates and returns a new silent `SoundData` which is `samples` samples long
@@ -736,7 +754,14 @@ Returns `true` if the source is currently paused.
 Returns `true` if the source is currently stopped.
 
 ##### Source:getType()
-Returns the type of the source: `"static"` or `"stream"`.
+Returns the type of the source: `"static"`, `"stream"` or `"queue"`.
+
+##### Source:queue(soundData)
+Adds a copy of the sound data, which must have the same format as the source,
+to a queueable source's queue. Returns `false` if all buffers are in use.
+
+##### Source:getFreeBufferCount()
+Returns the number of free buffers of a queueable source.
 
 ##### Source:getChannelCount()
 Returns the number of channels of the source's audio data: `1` for mono or `2`
@@ -791,6 +816,27 @@ source has its full volume, outside `outerAngle` it plays at `outerVolume`
 
 ##### Source:getCone()
 Returns the inner angle, outer angle and outer volume of the source's cone.
+
+
+### Decoder
+Reads audio from a file in chunks, created with `love.sound.newDecoder()`.
+
+##### Decoder:decode()
+Returns the next chunk as a new [SoundData](#sounddata), or `nil` at the end
+of the file.
+
+##### Decoder:seek(offset)
+##### Decoder:tell()
+Set and get the position in seconds.
+
+##### Decoder:getDuration()
+##### Decoder:getSampleRate()
+##### Decoder:getBitDepth()
+##### Decoder:getChannelCount()
+Return the duration in seconds and the format of the audio.
+
+##### Decoder:clone()
+Returns a new decoder for the same file.
 
 
 ### SoundData

@@ -46,7 +46,10 @@ Status: `[ ]` todo, `[x]` done.
       `getJoystickCount`, `Joystick` objects and the `joystickpressed`,
       `joystickreleased` and `joystickaxis` callbacks
 - [ ] **Tracker music**: `love.audio.newSource("song.mod")` for MOD files
-      (and S3M/XM if a suitable small integer-only player is available)
+      (and S3M/XM if a suitable small integer-only player is available).
+      *On hold:* the candidate players (micromod / IBXM by Martin Cameron,
+      integer-only, MOD/S3M/XM) don't state their licence in their files;
+      it needs to be confirmed before they can be included
 - [x] **love.filesystem (LÖVE 11)**: `getInfo`, `getDirectoryItems`,
       `lines`, `load`, `append`, `remove`, `createDirectory`,
       `getIdentity/setIdentity`, `getSaveDirectory`, `getWorkingDirectory`,
@@ -56,9 +59,10 @@ Status: `[ ]` todo, `[x]` done.
       `noise`, `triangulate`, `isConvex`, `newBezierCurve` / `BezierCurve`,
       `newTransform` / `Transform`, `colorFromBytes`, `colorToBytes`,
       `gammaToLinear`, `linearToGamma`
-- [ ] **Queueable sources and decoders**: `love.audio.newQueueableSource`,
+- [x] **Queueable sources and decoders**: `love.audio.newQueueableSource`,
       `Source:queue`, `Source:getFreeBufferCount`, `love.sound.newDecoder`
-      for streaming audio which doesn't fit into memory
+      for streaming audio which doesn't fit into memory; `"stream"` sources
+      from large files are streamed from disk
 
 
 ## Phase 3: small but useful

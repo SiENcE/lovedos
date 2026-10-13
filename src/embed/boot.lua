@@ -106,6 +106,9 @@ function love.boot()
   if love.audio then
     love.audio._init()
     love.audio._init = nil
+    if love.event then
+      love.event._addPumpHook(love.audio._update)
+    end
   end
   if love.joystick then
     love.joystick._init()
