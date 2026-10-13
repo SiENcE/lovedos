@@ -1,7 +1,8 @@
-#!/usr/bin/python2.7
+#!/usr/bin/env python
+from __future__ import print_function
 import os, sys, shutil, re, textwrap
 
-COMPILER    = "i586-pc-msdosdjgpp-gcc"
+COMPILER    = os.environ.get("DJGPP_CC", "i586-pc-msdosdjgpp-gcc")
 SRC_DIR     = "src"
 BIN_DIR     = "bin"
 BIN_NAME    = "love.exe"
@@ -27,8 +28,8 @@ def listdir(path):
 def make_c_include(name, data):
     name = re.sub("[^a-z0-9]", "_", name.lower())
     res = "static const char " + name + "[] = {"
-    for c in data:
-        res += str(ord(c)) + ", "
+    for c in bytearray(data):
+        res += str(c) + ", "
     res = res.rstrip(", ") + "};"
     return name, textwrap.fill(res, width=79)
 
@@ -46,8 +47,8 @@ def main():
 
   for filename in embedded_files:
     name = os.path.basename(filename)
-    name, text = make_c_include(name, open(filename).read())
-    open("%s/%s.h" % (TEMPSRC_DIR, name), "wb").write(text)
+    name, text = make_c_include(name, open(filename, "rb").read())
+    open("%s/%s.h" % (TEMPSRC_DIR, name), "w").write(text)
 
   cfiles = filter(lambda x:x.endswith((".c", ".C")), listdir(SRC_DIR))
 
@@ -64,16 +65,17 @@ def main():
       "argv"      : " ".join(sys.argv[1:])
     })
 
-  print "compiling..."
+  print("compiling...")
   res = os.system(cmd)
 
-  print "deleting temporary files..."
+  print("deleting temporary files...")
   if os.path.exists(TEMPSRC_DIR):
       shutil.rmtree(TEMPSRC_DIR)
 
-  print "done" + (" with errors" if res else "")
+  print("done" + (" with errors" if res else ""))
+  return 1 if res else 0
 
 
 
 if __name__ == "__main__":
-  main()
+  sys.exit(main())

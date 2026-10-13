@@ -12,7 +12,7 @@
 #include "luaobj.h"
 
 
-enum {
+typedef enum {
   IMAGE_NORMAL,
   IMAGE_FAST,
   IMAGE_AND,
