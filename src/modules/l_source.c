@@ -7,38 +7,129 @@
 
 #include <string.h>
 #include "lib/cmixer/cmixer.h"
-#include "filesystem.h"
+#include "audio.h"
+#include "sounddata.h"
 #include "luaobj.h"
 
 
 #define CLASS_TYPE  LUAOBJ_TYPE_SOURCE
 #define CLASS_NAME  "Source"
 
+/* Registry table of sources which are playing or paused: it keeps them from
+ * being garbage collected while the mixer still uses them */
+#define ACTIVE_SOURCES "lovedos.activeSources"
+
+#define CLAMP(x, a, b) ((x) < (a) ? (a) : (x) > (b) ? (b) : (x))
+
+
+enum { SOURCE_STATIC, SOURCE_STREAM };
+
+static const char *sourceTypes[] = { "static", "stream", NULL };
+static const char *timeUnits[] = { "seconds", "samples", NULL };
+
 
 typedef struct {
   cm_Source *source;
-  void *data;
+  sounddata_t *data;
+  int idx;            /* Read position of the stream; used by the mixer */
+  int type;
+  int looping;
+  double volume, minVolume, maxVolume;
+  double pitch;
 } source_t;
 
 
-int l_source_new(lua_State *L) {
-  const char *filename = luaL_checkstring(L, 1);
-  /* Create object */
+static void stream_handler(cm_Event *e) {
+  /* Feeds the mixer from the source's sounddata. This is called from inside
+   * the soundblaster's interrupt handler, so it must stay simple and free of
+   * floating point maths */
+  source_t *self = e->udata;
+  sounddata_t *data = self->data;
+  cm_Int16 *dst;
+  int len, n;
+
+  switch (e->type) {
+    case CM_EVENT_SAMPLES:
+      /* The mixer expects streams to continuously loop */
+      dst = e->buffer;
+      len = e->length / 2;
+      while (len > 0) {
+        n = data->length - self->idx;
+        n = n < len ? n : len;
+        sounddata_readStereo(data, self->idx, n, dst);
+        dst += n * 2;
+        len -= n;
+        self->idx += n;
+        if (self->idx >= data->length) {
+          self->idx = 0;
+        }
+      }
+      break;
+
+    case CM_EVENT_REWIND:
+      self->idx = 0;
+      break;
+
+    case CM_EVENT_SEEK:
+      self->idx = e->position % data->length;
+      break;
+  }
+}
+
+
+static void updateGain(source_t *self) {
+  cm_set_gain(self->source,
+              CLAMP(self->volume, self->minVolume, self->maxVolume));
+}
+
+
+static source_t *newSource(lua_State *L) {
   source_t *self = luaobj_newudata(L, sizeof(*self));
   luaobj_setclass(L, CLASS_TYPE, CLASS_NAME);
   memset(self, 0, sizeof(*self));
-  /* Load file */
-  int size;
-  self->data = filesystem_read(filename, &size);
-  if (!self->data) {
-    luaL_error(L, "could not open file");
-  }
-  /* Init source */
-  self->source = cm_new_source_from_mem(self->data, size);
+  self->volume = 1;
+  self->minVolume = 0;
+  self->maxVolume = 1;
+  self->pitch = 1;
+  return self;
+}
+
+
+static void initSource(lua_State *L, source_t *self) {
+  /* Creates the mixer source for the source's (already set) sounddata */
+  cm_SourceInfo info;
+  info.handler = stream_handler;
+  info.udata = self;
+  info.samplerate = self->data->samplerate;
+  info.length = self->data->length;
+  self->source = cm_new_source(&info);
   if (!self->source) {
     luaL_error(L, "%s", cm_get_error());
   }
-  /* Return object */
+  updateGain(self);
+  cm_set_pitch(self->source, self->pitch);
+  cm_set_loop(self->source, self->looping);
+}
+
+
+sounddata_t *l_sounddata_toSoundData(lua_State *L, int idx);
+
+int l_source_new(lua_State *L) {
+  sounddata_t *data = l_sounddata_toSoundData(L, 1);
+  const char *filename = data ? NULL : luaL_checkstring(L, 1);
+  int type = luaL_checkoption(L, 2, "stream", sourceTypes);
+  const char *err;
+  source_t *self = newSource(L);
+  if (data) {
+    /* Like LÖVE, the source gets its own copy of the SoundData */
+    self->type = SOURCE_STATIC;
+    err = sounddata_clone(&self->data, data);
+  } else {
+    self->type = type;
+    err = sounddata_newFromFile(&self->data, filename);
+  }
+  if (err) luaL_error(L, "%s", err);
+  initSource(L, self);
   return 1;
 }
 
@@ -46,39 +137,226 @@ int l_source_new(lua_State *L) {
 int l_source_gc(lua_State *L) {
   source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
   if (self->source) cm_destroy_source(self->source);
-  if (self->data) filesystem_free(self->data);
+  if (self->data) sounddata_release(self->data);
   return 0;
+}
+
+
+static void setActive(lua_State *L, int idx, int active) {
+  idx = lua_absindex(L, idx);
+  luaL_getsubtable(L, LUA_REGISTRYINDEX, ACTIVE_SOURCES);
+  lua_pushvalue(L, idx);
+  if (active) {
+    lua_pushboolean(L, 1);
+  } else {
+    lua_pushnil(L);
+  }
+  lua_rawset(L, -3);
+  lua_pop(L, 1);
+}
+
+
+void l_source_pushActive(lua_State *L) {
+  /* Pushes an array of all the sources which are currently playing or paused.
+   * Sources which have stopped by reaching their end are removed from the
+   * active sources table */
+  int n = 0;
+  luaL_getsubtable(L, LUA_REGISTRYINDEX, ACTIVE_SOURCES);
+  lua_newtable(L);
+  lua_pushnil(L);
+  while (lua_next(L, -3)) {
+    source_t *self = luaobj_checkudata(L, -2, CLASS_TYPE);
+    lua_pop(L, 1);
+    if (cm_get_state(self->source) == CM_STATE_STOPPED) {
+      /* Clearing an existing field during traversal is allowed */
+      lua_pushvalue(L, -1);
+      lua_pushnil(L);
+      lua_rawset(L, -5);
+    } else {
+      lua_pushvalue(L, -1);
+      lua_rawseti(L, -3, ++n);
+    }
+  }
+  lua_remove(L, -2);
+}
+
+
+int l_source_clone(lua_State *L) {
+  source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
+  source_t *clone = newSource(L);
+  clone->type = self->type;
+  clone->looping = self->looping;
+  clone->volume = self->volume;
+  clone->minVolume = self->minVolume;
+  clone->maxVolume = self->maxVolume;
+  clone->pitch = self->pitch;
+  clone->data = self->data;
+  sounddata_retain(clone->data);
+  initSource(L, clone);
+  return 1;
+}
+
+
+int l_source_play(lua_State *L) {
+  source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
+  if (!audio_isInitialized()) {
+    /* Without a soundblaster nothing would ever advance the source */
+    lua_pushboolean(L, 0);
+    return 1;
+  }
+  /* Drop references to sources which have finished playing */
+  l_source_pushActive(L);
+  lua_pop(L, 1);
+  cm_play(self->source);
+  setActive(L, 1, 1);
+  lua_pushboolean(L, 1);
+  return 1;
+}
+
+
+int l_source_pause(lua_State *L) {
+  source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
+  if (cm_get_state(self->source) == CM_STATE_PLAYING) {
+    cm_pause(self->source);
+  }
+  return 0;
+}
+
+
+int l_source_resume(lua_State *L) {
+  source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
+  if (cm_get_state(self->source) == CM_STATE_PAUSED) {
+    cm_play(self->source);
+  }
+  return 0;
+}
+
+
+int l_source_stop(lua_State *L) {
+  source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
+  cm_stop(self->source);
+  setActive(L, 1, 0);
+  return 0;
+}
+
+
+int l_source_rewind(lua_State *L) {
+  source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
+  cm_seek(self->source, 0);
+  return 0;
+}
+
+
+int l_source_seek(lua_State *L) {
+  source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
+  double offset = luaL_checknumber(L, 2);
+  int unit = luaL_checkoption(L, 3, "seconds", timeUnits);
+  if (unit == 0) {
+    offset *= self->data->samplerate;
+  }
+  if (offset < 0) {
+    luaL_argerror(L, 2, "offset must not be negative");
+  }
+  cm_seek(self->source, offset < self->data->length ? offset
+                                                     : self->data->length);
+  return 0;
+}
+
+
+int l_source_tell(lua_State *L) {
+  source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
+  int unit = luaL_checkoption(L, 2, "seconds", timeUnits);
+  int frame = cm_tell(self->source);
+  if (unit == 0) {
+    lua_pushnumber(L, frame / (double) self->data->samplerate);
+  } else {
+    lua_pushinteger(L, frame);
+  }
+  return 1;
+}
+
+
+int l_source_getDuration(lua_State *L) {
+  source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
+  int unit = luaL_checkoption(L, 2, "seconds", timeUnits);
+  if (unit == 0) {
+    lua_pushnumber(L, self->data->length / (double) self->data->samplerate);
+  } else {
+    lua_pushinteger(L, self->data->length);
+  }
+  return 1;
 }
 
 
 int l_source_setVolume(lua_State *L) {
   source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
   double n = luaL_checknumber(L, 2);
-  cm_set_gain(self->source, n);
+  self->volume = n < 0 ? 0 : n;
+  updateGain(self);
   return 0;
+}
+
+
+int l_source_getVolume(lua_State *L) {
+  source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
+  lua_pushnumber(L, self->volume);
+  return 1;
+}
+
+
+int l_source_setVolumeLimits(lua_State *L) {
+  source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
+  double min = luaL_checknumber(L, 2);
+  double max = luaL_checknumber(L, 3);
+  if (min < 0 || max > 1 || min > max) {
+    luaL_error(L, "invalid volume limits: [%f, %f]; must be [0, 1]", min, max);
+  }
+  self->minVolume = min;
+  self->maxVolume = max;
+  updateGain(self);
+  return 0;
+}
+
+
+int l_source_getVolumeLimits(lua_State *L) {
+  source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
+  lua_pushnumber(L, self->minVolume);
+  lua_pushnumber(L, self->maxVolume);
+  return 2;
 }
 
 
 int l_source_setPitch(lua_State *L) {
   source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
   double n = luaL_checknumber(L, 2);
+  /* `n * 0 == 0` is false for infinity and NaN */
+  if (!(n > 0) || n * 0 != 0) {
+    luaL_argerror(L, 2, "pitch must be a positive, finite number");
+  }
+  self->pitch = n;
   cm_set_pitch(self->source, n);
   return 0;
 }
 
 
+int l_source_getPitch(lua_State *L) {
+  source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
+  lua_pushnumber(L, self->pitch);
+  return 1;
+}
+
+
 int l_source_setLooping(lua_State *L) {
   source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
-  int enable = lua_toboolean(L, 2);
-  cm_set_loop(self->source, enable);
+  self->looping = lua_toboolean(L, 2);
+  cm_set_loop(self->source, self->looping);
   return 0;
 }
 
 
-int l_source_getDuration(lua_State *L) {
+int l_source_isLooping(lua_State *L) {
   source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
-  double n = cm_get_length(self->source);
-  lua_pushnumber(L, n);
+  lua_pushboolean(L, self->looping);
   return 1;
 }
 
@@ -104,50 +382,47 @@ int l_source_isStopped(lua_State *L) {
 }
 
 
-int l_source_tell(lua_State *L) {
+int l_source_getType(lua_State *L) {
   source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
-  double n = cm_get_position(self->source);
-  lua_pushnumber(L, n);
+  lua_pushstring(L, sourceTypes[self->type]);
   return 1;
 }
 
 
-int l_source_play(lua_State *L) {
+int l_source_getChannelCount(lua_State *L) {
   source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
-  cm_play(self->source);
-  return 0;
-}
-
-
-int l_source_pause(lua_State *L) {
-  source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
-  cm_pause(self->source);
-  return 0;
-}
-
-
-int l_source_stop(lua_State *L) {
-  source_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
-  cm_stop(self->source);
-  return 0;
+  lua_pushinteger(L, self->data->channels);
+  return 1;
 }
 
 
 int luaopen_source(lua_State *L) {
   luaL_Reg reg[] = {
-    { "new",            l_source_new            },
-    { "__gc",           l_source_gc             },
-    { "setVolume",      l_source_setVolume      },
-    { "setPitch",       l_source_setPitch       },
-    { "setLooping",     l_source_setLooping     },
-    { "getDuration",    l_source_getDuration    },
-    { "isPlaying",      l_source_isPlaying      },
-    { "isPaused",       l_source_isPaused       },
-    { "isStopped",      l_source_isStopped      },
-    { "tell",           l_source_tell           },
-    { "play",           l_source_play           },
-    { "pause",          l_source_pause          },
-    { "stop",           l_source_stop           },
+    { "new",              l_source_new              },
+    { "__gc",             l_source_gc               },
+    { "clone",            l_source_clone            },
+    { "play",             l_source_play             },
+    { "pause",            l_source_pause            },
+    { "resume",           l_source_resume           },
+    { "stop",             l_source_stop             },
+    { "rewind",           l_source_rewind           },
+    { "seek",             l_source_seek             },
+    { "tell",             l_source_tell             },
+    { "getDuration",      l_source_getDuration      },
+    { "setVolume",        l_source_setVolume        },
+    { "getVolume",        l_source_getVolume        },
+    { "setVolumeLimits",  l_source_setVolumeLimits  },
+    { "getVolumeLimits",  l_source_getVolumeLimits  },
+    { "setPitch",         l_source_setPitch         },
+    { "getPitch",         l_source_getPitch         },
+    { "setLooping",       l_source_setLooping       },
+    { "isLooping",        l_source_isLooping        },
+    { "isPlaying",        l_source_isPlaying        },
+    { "isPaused",         l_source_isPaused         },
+    { "isStopped",        l_source_isStopped        },
+    { "getType",          l_source_getType          },
+    { "getChannelCount",  l_source_getChannelCount  },
+    { "getChannels",      l_source_getChannelCount  },
     { 0, 0 },
   };
   luaobj_newclass(L, CLASS_NAME, NULL, l_source_new, reg);

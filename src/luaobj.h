@@ -26,6 +26,7 @@ typedef struct {
 #define LUAOBJ_TYPE_QUAD   (1 << 1)
 #define LUAOBJ_TYPE_FONT   (1 << 2)
 #define LUAOBJ_TYPE_SOURCE (1 << 3)
+#define LUAOBJ_TYPE_SOUNDDATA (1 << 4)
 
 
 int luaobj_newclass(lua_State *L, const char *name, const char *extends,

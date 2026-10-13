@@ -9,6 +9,7 @@
 * [love.mouse](#lovemouse)
 * [love.filesystem](#lovefilesystem)
 * [love.audio](#loveaudio)
+* [love.sound](#lovesound)
 * [love.event](#loveevent)
 
 ##### [Objects](#objects-1)
@@ -16,6 +17,7 @@
 * [Quad](#quad)
 * [Font](#font)
 * [Source](#source)
+* [SoundData](#sounddata)
 
 ##### [Callbacks](#callbacks-1)
 
@@ -222,12 +224,71 @@ Writes `string` to the given `filename` in the game's save directory.
 
 
 ### love.audio
-##### love.audio.newSource(filename)
-Creates and returns a new audio source. `filename` should the filename of the
-`.wav` file to load.
+Provides an interface for playing sounds. Audio is output through a Sound
+Blaster 16 (or compatible) as 16 bit stereo at 22050Hz; the card is configured
+by the `BLASTER` environment variable (eg. `A220 I7 D1 H5 T6`, as set by
+DOSBox). If no Sound Blaster 16 is found LoveDOS still runs, but no sound is
+played and `Source:play()` returns `false`.
+
+Sources which are playing or paused are kept alive by the audio system, so a
+source does not need to be kept in a variable for it to play to its end.
+
+##### love.audio.newSource(filename [, type])
+##### love.audio.newSource(soundData)
+Creates and returns a new audio source. `filename` should be the filename of
+the `.wav` file to load; 8 and 16 bit PCM files in mono or stereo with any
+sample rate are supported. `type` can be `"static"` or `"stream"` (the
+default); as all audio is loaded into memory this only affects the value
+returned by `Source:getType()`. If a `SoundData` is passed a `"static"` source
+is created which plays a copy of the sound data.
+
+##### love.audio.play(source, ...)
+Plays the given sources. Each argument can either be a source or a table
+containing sources. Returns `true` if all the sources started playing.
+
+##### love.audio.pause([source, ...])
+Pauses the given sources (each argument can be a source or a table of
+sources). If no arguments are given all the playing sources are paused and a
+table containing them is returned.
+
+##### love.audio.resume([source, ...])
+Resumes the given paused sources, or all the paused sources if no arguments are
+given.
+
+##### love.audio.stop([source, ...])
+Stops the given sources, or all the sources if no arguments are given.
+
+##### love.audio.rewind([source, ...])
+Rewinds the given sources, or all the playing and paused sources if no
+arguments are given.
+
+##### love.audio.getActiveSourceCount()
+Returns the number of sources which are currently playing or paused.
+`love.audio.getSourceCount()` is an alias of this function.
+
+##### love.audio.getActiveSources()
+Returns a table containing all the sources which are currently playing or
+paused.
 
 ##### love.audio.setVolume(volume)
 Sets the master volume, by default this is `1`.
+
+##### love.audio.getVolume()
+Returns the master volume.
+
+
+### love.sound
+Provides functions for creating and loading raw audio data.
+
+##### love.sound.newSoundData(filename)
+Loads the `.wav` file `filename` and returns its audio data as a new
+`SoundData`.
+
+##### love.sound.newSoundData(samples [, rate, bits, channels])
+Creates and returns a new silent `SoundData` which is `samples` samples long
+(per channel). `rate` is the sample rate and defaults to `44100`, `bits` is the
+bit depth -- `8` or `16` (the default) -- and `channels` is either `1` (mono)
+or `2` (stereo, the default).
 
 
 ### love.event
@@ -283,18 +344,71 @@ Returns the height of the font in pixels.
 
 
 ### Source
+A sound which can be played; created with `love.audio.newSource()`. Functions
+which take a `unit` argument accept `"seconds"` (the default) or `"samples"`.
+
+##### Source:play()
+Plays the audio source. If the source is already playing then this function has
+no effect; if it is paused playback continues where it left off. To play back
+from the start call `Source:stop()` before calling this function. Returns
+`true` on success, or `false` if no sound device is available.
+
+##### Source:pause()
+Pauses the source's playback. This stops playback without losing the current
+position, calling `Source:play()` will continue playing where it left off.
+
+##### Source:resume()
+Resumes playback of a paused source.
+
+##### Source:stop()
+Stops playing and rewinds the source's play position back to the beginning.
+
+##### Source:rewind()
+Moves the source's play position back to the beginning without changing
+whether it is playing.
+
+##### Source:seek(offset [, unit])
+Sets the play position to `offset`. If the source is stopped playback will
+start from this position when `Source:play()` is called.
+
+##### Source:tell([unit])
+Returns the current play position.
+
+##### Source:getDuration([unit])
+Returns the length of the source's audio data.
+
+##### Source:clone()
+Returns a new stopped source which plays the same audio data and has the same
+settings (volume, pitch, looping and volume limits) as this one. Clones share
+their audio data, which makes them cheap to create -- this is useful for
+playing the same sound effect several times at once.
+
 ##### Source:setVolume(volume)
 Sets the volume -- by default this is `1`.
 
+##### Source:getVolume()
+Returns the volume.
+
+##### Source:setVolumeLimits(min, max)
+Sets the minimum and maximum volume of the source; both values must be between
+`0` and `1`. The volume set by `Source:setVolume()` is clamped to these limits
+when playing. By default the limits are `0` and `1`.
+
+##### Source:getVolumeLimits()
+Returns the minimum and maximum volume limits.
+
 ##### Source:setPitch(pitch)
 Sets the pitch (playback speed). By default this is `1`. `0.5` is half the
-pitch, `2` is double the pitch.
+pitch, `2` is double the pitch. `pitch` must be larger than `0`.
+
+##### Source:getPitch()
+Returns the pitch.
 
 ##### Source:setLooping(enable)
 Enables looping if `enable` is `true`. By default looping is disabled.
 
-##### Source:getDuration()
-Gets the length in seconds of the source's audio data.
+##### Source:isLooping()
+Returns `true` if looping is enabled.
 
 ##### Source:isPlaying()
 Returns `true` if the source is currently playing.
@@ -305,19 +419,55 @@ Returns `true` if the source is currently paused.
 ##### Source:isStopped()
 Returns `true` if the source is currently stopped.
 
-##### Source:tell()
-Returns the current playback position in seconds.
+##### Source:getType()
+Returns the type of the source: `"static"` or `"stream"`.
 
-##### Source:play()
-Plays the audio source. If the source is already playing then this function has
-no effect. To play back from the start call `Source:stop()` before calling this
+##### Source:getChannelCount()
+Returns the number of channels of the source's audio data: `1` for mono or `2`
+for stereo. `Source:getChannels()` is an alias of this function.
+
+
+### SoundData
+Raw audio data which can be read and modified sample by sample, for example to
+generate sound effects; created with `love.sound.newSoundData()`. Sample values
+are numbers between `-1` and `1`. Sample indices start at `0`.
+
+##### SoundData:getSample(i)
+##### SoundData:getSample(i, channel)
+Returns the value of a sample. With one argument `i` is the index of the
+sample in the interleaved data -- for stereo data even indices are on the left
+channel and odd ones on the right channel. If `channel` (`1` or `2`) is given,
+`i` is the index of the sample within that channel.
+
+##### SoundData:setSample(i, value)
+##### SoundData:setSample(i, channel, value)
+Sets the value of a sample; the arguments `i` and `channel` work as in
+`SoundData:getSample()`. `value` is clamped to the range `-1` to `1`.
+
+##### SoundData:getSampleCount()
+Returns the number of samples per channel.
+
+##### SoundData:getSampleRate()
+Returns the sample rate.
+
+##### SoundData:getBitDepth()
+Returns the bit depth: `8` or `16`.
+
+##### SoundData:getChannelCount()
+Returns the number of channels. `SoundData:getChannels()` is an alias of this
 function.
 
-##### Source:pause()
-Pauses the source's playback. This stops playback without losing the current position, calling `Source:play()` will continue playing where it left off.
+##### SoundData:getDuration()
+Returns the duration in seconds.
 
-##### Source:stop()
-Stops playing and rewinds the source's play position back to the beginning.
+##### SoundData:getSize()
+Returns the size of the raw audio data in bytes.
+
+##### SoundData:getString()
+Returns the raw audio data as a string.
+
+##### SoundData:clone()
+Returns a copy of the sound data.
 
 
 ## Callbacks

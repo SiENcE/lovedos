@@ -20,11 +20,13 @@ int luaopen_image(lua_State *L);
 int luaopen_quad(lua_State *L);
 int luaopen_font(lua_State *L);
 int luaopen_source(lua_State *L);
+int luaopen_sounddata(lua_State *L);
 int luaopen_system(lua_State *L);
 int luaopen_event(lua_State *L);
 int luaopen_filesystem(lua_State *L);
 int luaopen_graphics(lua_State *L);
 int luaopen_audio(lua_State *L);
+int luaopen_sound(lua_State *L);
 int luaopen_timer(lua_State *L);
 int luaopen_keyboard(lua_State *L);
 int luaopen_mouse(lua_State *L);
@@ -39,6 +41,7 @@ int luaopen_love(lua_State *L) {
     luaopen_quad,
     luaopen_font,
     luaopen_source,
+    luaopen_sounddata,
     NULL,
   };
   for (i = 0; classes[i]; i++) {
@@ -60,6 +63,7 @@ int luaopen_love(lua_State *L) {
     { "filesystem", luaopen_filesystem  },
     { "graphics",   luaopen_graphics    },
     { "audio",      luaopen_audio       },
+    { "sound",      luaopen_sound       },
     { "timer",      luaopen_timer       },
     { "keyboard",   luaopen_keyboard    },
     { "mouse",      luaopen_mouse       },
