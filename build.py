@@ -9,7 +9,10 @@ BIN_NAME    = "love.exe"
 EMBED_DIR   = "src/embed"
 TEMPSRC_DIR = ".tempsrc"
 
-CFLAGS    = [ "-O2", "-Wall", "-s", "-Wno-misleading-indentation" ]
+# -march=i386 keeps the executable free of 486+ instructions (such as bswap,
+# which GCC emits when targeting the default Pentium) so it runs on 386s
+CFLAGS    = [ "-O2", "-Wall", "-s", "-Wno-misleading-indentation",
+              "-march=i386", "-mtune=i486" ]
 DLIBS     = [ "m" ]
 DEFINES   = [ "DMT_ABORT_NULL", "LUA_COMPAT_ALL" ]
 INCLUDES  = [ "src", TEMPSRC_DIR ]
