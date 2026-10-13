@@ -18,9 +18,11 @@
 
 #define BYTE(val, byte) (((val) >> ((byte) * 8)) & 0xFF)
 
-#define SOUNDBLASTER_SAMPLES_PER_BUFFER 2048
-#define SAMPLE_BUFFER_SIZE (SOUNDBLASTER_SAMPLES_PER_BUFFER * sizeof(uint16_t) * 2)
+// The DMA buffer holds two halves of SOUNDBLASTER_SAMPLES_PER_BUFFER 16 bit
+// samples each (interleaved stereo); one half is refilled per interrupt
+#define SAMPLE_BUFFER_SIZE (SOUNDBLASTER_SAMPLES_PER_BUFFER * sizeof(int16_t) * 2)
 #define SAMPLE_RATE 22050
+#define STOP_TIMEOUT_MS 500
 
 
 // SB16
@@ -48,6 +50,8 @@
 #define BLASTER_SPEAKER_ON_CMD               0xD1
 #define BLASTER_SPEAKER_OFF_CMD              0xD3
 #define BLASTER_EXIT_AUTO_DMA                0xD9
+#define BLASTER_GET_DSP_VERSION              0xE1
+#define BLASTER_MIN_DSP_VERSION              4
 
 
 // PIC
@@ -92,6 +96,7 @@ static uint16_t      dmaChannel;
 static bool          isrInstalled = false;
 static int           writePage = 0;
 static bool          blasterInitialized = false;
+static uint8_t       oldIrqMaskBit;
 static _go32_dpmi_seginfo oldBlasterHandler, newBlasterHandler;
 static soundblaster_getSampleProc getSamples;
 
@@ -172,29 +177,47 @@ static void soundblasterISR(void) {
 }
 
 
-static void setBlasterISR(void) {
+static uint16_t irqToInterruptVector(void) {
   // Map IRQ to interrupt number on the CPU
-  uint16_t interruptVector = irq + irq + (irq < 8)
-    ? PIC_IRQ07_MAP
-    : PIC_IRQ8F_MAP;
+  return irq < 8
+    ? PIC_IRQ07_MAP + irq
+    : PIC_IRQ8F_MAP + (irq - 8);
+}
+
+
+static uint16_t picDataPort(void) {
+  return irq < 8 ? PIC1_DATA : PIC2_DATA;
+}
+
+
+static uint8_t picIrqBit(void) {
+  return 1 << (irq & 7);
+}
+
+
+static int setBlasterISR(void) {
+  uint16_t interruptVector = irqToInterruptVector();
 
   _go32_dpmi_get_protected_mode_interrupt_vector(interruptVector, 
                                                  &oldBlasterHandler);
 
+  // The ISR acknowledges the interrupt itself, so it must not be chained to
+  // the previous handler (which would send a second EOI to the PIC)
   newBlasterHandler.pm_offset = (int)soundblasterISR;
   newBlasterHandler.pm_selector = _go32_my_cs();
-  _go32_dpmi_chain_protected_mode_interrupt_vector(interruptVector, &newBlasterHandler);
-
-  // PIC: unmask SB IRQ
-  if(irq < 8) {
-    uint8_t irqmask = inportb(PIC1_DATA);
-    outportb(PIC1_DATA, irqmask & ~(1<<irq));
-  } else {
-    uint8_t irqmask = inportb(PIC2_DATA);
-    outportb(PIC2_DATA, irqmask & ~(1<<(irq-8)));
+  if(_go32_dpmi_allocate_iret_wrapper(&newBlasterHandler) != 0) {
+    return SOUNDBLASTER_DOS_ERROR;
   }
+  _go32_dpmi_set_protected_mode_interrupt_vector(interruptVector,
+                                                 &newBlasterHandler);
+
+  // PIC: unmask SB IRQ, remembering its previous state for deinit
+  uint8_t irqmask = inportb(picDataPort());
+  oldIrqMaskBit = irqmask & picIrqBit();
+  outportb(picDataPort(), irqmask & ~picIrqBit());
 
   isrInstalled = true;
+  return 0;
 }
 
 
@@ -222,37 +245,49 @@ static int parseBlasterSettings(void) {
 
 
 static int allocSampleBuffer(void) {
-  static int maxRetries = 10;
+  enum { maxRetries = 10 };
   int selectors[maxRetries];
-  int current;
+  int count;
 
-  for(current = 0; current < maxRetries; ++current) {
-    int segment = __dpmi_allocate_dos_memory((SAMPLE_BUFFER_SIZE+15)>>4, &selectors[current]);
+  for(count = 0; count < maxRetries; ++count) {
+    int segment = __dpmi_allocate_dos_memory((SAMPLE_BUFFER_SIZE+15)>>4, &selectors[count]);
     if(segment == -1) {
       break;
     }
 
-    uint32_t bufferPhys = __djgpp_conventional_base + segment * 16;
-
-    // The DMA buffer must not cross a 64k boundary
-    if(bufferPhys % 0x10000 < 0x10000 - SAMPLE_BUFFER_SIZE) {
-      sampleBuffer = (uint16_t*)bufferPhys;
+    // The DMA buffer must not cross a 64k boundary of its *physical* address
+    // (16 bit DMA channels work on 128k pages, so this covers them as well)
+    uint32_t bufferPhys = segment * 16;
+    if(bufferPhys % 0x10000 <= 0x10000 - SAMPLE_BUFFER_SIZE) {
+      sampleBuffer = (uint16_t*)(__djgpp_conventional_base + bufferPhys);
       memset(sampleBuffer, 0, SAMPLE_BUFFER_SIZE);
-      sampleBufferSelector = selectors[current];
-      --current;
+      sampleBufferSelector = selectors[count];
       break;
-    } 
+    }
   }
 
-  // Free misaligned buffers
-  for(; current > 0; --current) {
-    __dpmi_free_dos_memory(selectors[current]);
+  // Free the unsuitable buffers allocated before the one we kept
+  for(int i = 0; i < count; ++i) {
+    __dpmi_free_dos_memory(selectors[i]);
   }
 
   if(sampleBuffer == NULL) {
     return SOUNDBLASTER_ALLOC_ERROR;
   }
 
+  return 0;
+}
+
+
+static int checkDSPVersion(void) {
+  writeDSP(BLASTER_GET_DSP_VERSION);
+  uint8_t major = readDSP();
+  uint8_t minor = readDSP();
+  if(major < BLASTER_MIN_DSP_VERSION) {
+    fprintf(stderr, "Sound Blaster 16 required (found DSP version %d.%02d)\n",
+            major, minor);
+    return SOUNDBLASTER_UNSUPPORTED;
+  }
   return 0;
 }
 
@@ -310,7 +345,8 @@ static void dmaSetupTransfer(int      channel,
 static void startDMAOutput(void) {
   uint32_t offset = ((uint32_t)sampleBuffer) - __djgpp_conventional_base;
 
-  uint32_t samples = SAMPLE_BUFFER_SIZE / sizeof(int16_t);
+  // Number of 16 bit samples (both channels) after which the DSP interrupts
+  uint32_t samples = SOUNDBLASTER_SAMPLES_PER_BUFFER;
 
   dmaSetupTransfer(dmaChannel, DMA_DIRECTION_READ_FROM_MEMORY, true, false,
                    DMA_TRANSFER_MODE_BLOCK, offset, SAMPLE_BUFFER_SIZE);
@@ -322,10 +358,13 @@ static void startDMAOutput(void) {
   writeDSP(BLASTER_PROGRAM_16BIT_IO_CMD
             | BLASTER_PROGRAM_FLAG_AUTO_INIT
             | BLASTER_PROGRAM_FLAG_FIFO);
-  writeDSP(BLASTER_PROGRAM_SIGNED);
-  writeDSP(BYTE(samples/2-1, 0));
-  writeDSP(BYTE(samples/2-1, 1));
+  writeDSP(BLASTER_PROGRAM_SIGNED | BLASTER_PROGRAM_STEREO);
+  writeDSP(BYTE(samples-1, 0));
+  writeDSP(BYTE(samples-1, 1));
 }
+
+
+static void deallocSampleBuffer(void);
 
 
 int soundblaster_init(soundblaster_getSampleProc getsamplesproc) {
@@ -345,6 +384,11 @@ int soundblaster_init(soundblaster_getSampleProc getsamplesproc) {
     return err;
   }
 
+  err = checkDSPVersion();
+  if(err != 0) {
+    return err;
+  }
+
   err = allocSampleBuffer();
   if(err != 0) {
     fprintf(stderr, "Could not allocate sample buffer in conventional memory\n");
@@ -353,7 +397,12 @@ int soundblaster_init(soundblaster_getSampleProc getsamplesproc) {
 
   getSamples = getsamplesproc;
 
-  setBlasterISR();
+  err = setBlasterISR();
+  if(err != 0) {
+    fprintf(stderr, "Could not install Soundblaster interrupt handler\n");
+    deallocSampleBuffer();
+    return err;
+  }
   turnSpeakerOn();
   startDMAOutput();
 
@@ -365,24 +414,36 @@ int soundblaster_init(soundblaster_getSampleProc getsamplesproc) {
 
 static void deallocSampleBuffer(void) {
   __dpmi_free_dos_memory(sampleBufferSelector);
+  sampleBuffer = NULL;
 }
 
 
 static void resetBlasterISR(void) {
   if(isrInstalled) {
-    uint16_t interruptVector = irq + irq + (irq < 8)
-      ? PIC_IRQ07_MAP
-      : PIC_IRQ8F_MAP;
+    // PIC: restore the previous mask state of the SB IRQ
+    uint8_t irqmask = inportb(picDataPort());
+    outportb(picDataPort(), (irqmask & ~picIrqBit()) | oldIrqMaskBit);
 
-    _go32_dpmi_set_protected_mode_interrupt_vector(interruptVector, &oldBlasterHandler);
+    _go32_dpmi_set_protected_mode_interrupt_vector(irqToInterruptVector(),
+                                                   &oldBlasterHandler);
+    _go32_dpmi_free_iret_wrapper(&newBlasterHandler);
     isrInstalled = false;
   }
 }
 
 
 static void stopDMAOutput(void) {
+  // Let the ISR end auto-init DMA at the next block boundary. Give up after a
+  // timeout so a missing interrupt can't hang the program on exit
+  uclock_t start = uclock();
   stopDma = 1;
-  while(stopDma == 1) {}
+  while(stopDma == 1) {
+    if(uclock() - start > (uclock_t)UCLOCKS_PER_SEC * STOP_TIMEOUT_MS / 1000) {
+      writeDSP(BLASTER_EXIT_AUTO_DMA);
+      stopDma = 2;
+      break;
+    }
+  }
 }
 
 
