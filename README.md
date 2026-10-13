@@ -40,6 +40,54 @@ The [doc/packaging.md](doc/packaging.md) file provides instructions for
 packaging your game for distribution.
 
 
+## System requirements
+* A 386 or better. A math coprocessor (387) is strongly recommended: Lua uses
+  floating point for all numbers, which is very slow when emulated
+* VGA
+* A Sound Blaster 16 (or compatible) for sound; LoveDOS runs without one
+* Enough RAM for your game's assets: all memory is locked as the audio
+  interrupt handler accesses it, so DPMI virtual memory (swapping) is not used
+
+
+## Performance
+The [bench](bench/main.lua) directory contains a benchmark which can be run
+with `love bench`. Measured in DOSBox (`cycles=fixed 5500` with `cputype=386`
+approximating a 386DX-30, `cycles=fixed 26000` with `cputype=486_slow`
+approximating a 486DX2-66) it gives the following; real hardware with a slow
+ISA VGA card will take longer for `present`, and a real 386 takes longer for
+multiplications and floating point maths than DOSBox assumes.
+
+Operation                               | 386DX-30 | 486DX2-66
+----------------------------------------|----------|----------
+Audio mixing, 1 source (22kHz)          | 17% CPU  | 3.6% CPU
+Audio mixing, 4 sources (22kHz)         | 41% CPU  | 8.7% CPU
+Audio mixing, 4 sources (44kHz or pitched) | 85-94% CPU | 18-20% CPU
+`love.graphics.clear()`                 | 3.0ms    | 0.63ms
+`love.graphics.present()`               | 3.0ms    | 0.63ms
+`draw()` 16x16 image                    | 0.41ms   | 0.09ms
+`draw()` 16x16 image, scaled x2         | 2.9ms    | 0.61ms
+`draw()` 16x16 image, rotated           | 2.4ms    | 0.50ms
+`print()` 43 characters                 | 4.1ms    | 0.87ms
+`printf()` 176 characters, wrapped      | 17ms     | 3.6ms
+`Source:setPosition()`                  | 0.22ms   | 0.05ms
+
+Some tips for keeping games fast on slow machines:
+* Use 22050Hz (or lower) sound files and avoid `Source:setPitch()` where
+  possible: sources with other sample rates or a pitch need interpolation,
+  which roughly doubles their mixing cost. When no source is playing mixing
+  costs almost nothing (about 1% on a 386).
+* Positional audio is calculated when a source or the listener changes, not
+  while mixing, so positioned sources cost no more to play than others.
+* Rotated and scaled drawing maps every pixel individually and is 6-7 times
+  slower than normal drawing; mirroring with a scale of `-1` is fast.
+* Text is expensive: static text can be drawn to a canvas once, drawing the
+  canvas each frame is cheaper than printing the text again.
+* Draw many pixels with a single `love.graphics.points()` call rather than
+  many `love.graphics.point()` calls.
+* `love.graphics.setScissor()` makes clipped drawing cheaper, not more
+  expensive.
+
+
 ## Building
 Instructions for building the project from source can be found in the
 [doc/building.md](doc/building.md) file.

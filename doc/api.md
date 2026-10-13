@@ -96,25 +96,69 @@ Sets the current canvas which all the draw operations will draw to. If the
 `image` argument is not set then the canvas is reset to the default canvas
 representing the user's screen.
 
+##### love.graphics.getScissor()
+Returns the `x`, `y`, `width` and `height` of the scissor rectangle, or nothing
+if no scissor is set.
+
+##### love.graphics.setScissor([x, y, width, height])
+Limits all drawing -- including `love.graphics.clear()` -- to the given
+rectangle. The rectangle is in screen (or canvas) coordinates and is not
+affected by `love.graphics.translate()`. If called without arguments the
+scissor is disabled.
+
+##### love.graphics.push()
+Saves the current transformation (see `love.graphics.translate()`) on a stack;
+up to 64 transformations can be pushed.
+
+##### love.graphics.pop()
+Restores the transformation saved by the last `love.graphics.push()`.
+
+##### love.graphics.origin()
+Resets the transformation so that nothing is translated.
+
+##### love.graphics.translate(dx, dy)
+Moves the origin of all following drawing operations by `dx`, `dy`. Unlike in
+LÖVE rotation and scaling of the coordinate system are not supported, as these
+would make all of the drawing functions too slow on DOS machines; images can
+still be rotated and scaled individually with `love.graphics.draw()`.
+
 ##### love.graphics.reset()
-Resets the font, color, background color, canvas, blend mode and flip mode to
-their defaults.
+Resets the font, color, background color, canvas, blend mode, scissor and
+transformation to their defaults.
 
 ##### love.graphics.clear(red, green, blue)
 Clears the screen (or canvas) to the color. If no color argument is given
 then the background color is used (see `love.graphics.setBackgroundColor()`).
 
-##### love.graphics.draw(image [, quad] [, x [, y [, flip]]])
-Draws the `image` to the screen at the given `x`, `y` position. If a `quad`
-argument is provided then the image is clipped to the provided quad when drawn.
-If `flip` is true then the image is flipped horizontally.
+##### love.graphics.draw(image [, quad] [, x, y, r, sx, sy, ox, oy])
+Draws the `image` to the screen with its origin at the given `x`, `y` position.
+If a `quad` argument is provided then the image is clipped to the provided quad
+when drawn. `r` is the rotation in radians, `sx` and `sy` the horizontal and
+vertical scale (`sy` defaults to `sx`) and `ox`, `oy` the origin within the
+image around which the image is rotated and scaled.
+
+Unrotated images with a scale of `1` or `-1` (mirrored horizontally) are drawn
+with a fast copy; any other rotation or scale maps each pixel individually and
+is several times slower.
+
+For compatibility with older versions of LoveDOS
+`love.graphics.draw(image [, quad], x, y, flip)` is also supported: if `flip`
+is `true` the image is flipped horizontally.
 
 ##### love.graphics.point(x, y)
 Draws a pixel.
 
+##### love.graphics.points(x, y, ...)
+##### love.graphics.points(points)
+Draws pixels. `points` can be a table of numbers (`{x1, y1, x2, y2, ...}`) or
+a table of tables (`{{x1, y1}, {x2, y2}, ...}`). Drawing many points in one
+call is much faster than calling `love.graphics.point()` repeatedly.
+
 ##### love.graphics.line(x, y, x2, y2 [, ...])
+##### love.graphics.line(points)
 Draws a line from the positition `x`, `y` to `x2`, `y2`. You can continue
-passing point positions to draw a polyline.
+passing point positions to draw a polyline. The points can also be given as a
+table as for `love.graphics.points()`.
 
 ##### love.graphics.rectangle(mode, x, y, width, height)
 Draws a rectange and the `x`, `y` position of the given `width` and `height`.
@@ -124,9 +168,25 @@ Draws a rectange and the `x`, `y` position of the given `width` and `height`.
 Draws a circle of a given `radius` with its center at the `x`, `y` position.
 `mode` should be either `"fill"` or `"line"`.
 
-##### love.graphics.print(text, x, y)
+##### love.graphics.ellipse(mode, x, y, radiusx [, radiusy])
+Draws an ellipse with its center at the `x`, `y` position. `mode` should be
+either `"fill"` or `"line"`.
+
+##### love.graphics.polygon(mode, x1, y1, x2, y2, x3, y3 [, ...])
+##### love.graphics.polygon(mode, points)
+Draws a polygon with at least three vertices, which can also be given as a
+table as for `love.graphics.points()`. `mode` should be either `"fill"` or
+`"line"`. Filled polygons may be concave or self-intersecting (the even-odd
+rule is used).
+
+##### love.graphics.print(text [, x, y])
 Draws the `text` string in the current font with its top left at the `x`, `y`
 position.
+
+##### love.graphics.printf(text, x, y, limit [, align])
+Draws the `text` string, wrapped at spaces so that no line is wider than
+`limit` pixels. `align` can be `"left"` (the default), `"center"`, `"right"`
+or `"justify"`.
 
 ##### love.graphics.newImage(filename)
 Creates and returns a new image. `filename` should be the name of an image file.
@@ -276,6 +336,45 @@ Sets the master volume, by default this is `1`.
 ##### love.audio.getVolume()
 Returns the master volume.
 
+##### love.audio.setPosition(x, y [, z])
+Sets the position of the listener, by default this is `0, 0, 0`. Mono sources
+are attenuated and panned between the left and right speaker depending on
+their position relative to the listener (see `Source:setPosition()`); stereo
+sources are not affected. The positional audio is calculated whenever a source
+or the listener changes, so it adds no cost to mixing the audio.
+
+##### love.audio.getPosition()
+Returns the position of the listener.
+
+##### love.audio.setOrientation(fx, fy, fz, ux, uy, uz)
+Sets the orientation of the listener as a forward and an up vector. The
+default orientation is `0, 0, -1, 0, 1, 0`: looking into the screen with `+x`
+to the right, which suits 2D games.
+
+##### love.audio.getOrientation()
+Returns the forward and up vectors of the listener.
+
+##### love.audio.setVelocity(x, y [, z])
+Sets the velocity of the listener, which is used for the doppler effect.
+
+##### love.audio.getVelocity()
+Returns the velocity of the listener.
+
+##### love.audio.setDistanceModel(model)
+Sets how sources are attenuated with distance. `model` is one of `"none"`,
+`"inverse"`, `"inverseclamped"` (the default), `"linear"`, `"linearclamped"`,
+`"exponent"` and `"exponentclamped"`; these work as in OpenAL.
+
+##### love.audio.getDistanceModel()
+Returns the distance model.
+
+##### love.audio.setDopplerScale(scale)
+Sets the strength of the doppler effect, by default this is `1`. Velocities
+are in units per second with the speed of sound being `343.3`.
+
+##### love.audio.getDopplerScale()
+Returns the doppler scale.
+
 
 ### love.sound
 Provides functions for creating and loading raw audio data.
@@ -337,10 +436,16 @@ A font used by `love.graphics.print()`. The current font can be set using the
 
 ##### Font:getWidth(text)
 Returns the width in pixels that the `text` string would take when printed using
-this font.
+this font. For text with multiple lines the width of the widest line is
+returned.
 
 ##### Font:getHeight()
 Returns the height of the font in pixels.
+
+##### Font:getWrap(text, limit)
+Returns the width of the widest line and a table containing the lines the
+`text` string is split into when wrapped at `limit` pixels, as done by
+`love.graphics.printf()`.
 
 
 ### Source
@@ -425,6 +530,56 @@ Returns the type of the source: `"static"` or `"stream"`.
 ##### Source:getChannelCount()
 Returns the number of channels of the source's audio data: `1` for mono or `2`
 for stereo. `Source:getChannels()` is an alias of this function.
+
+The following positional audio functions can only be used with mono sources;
+using them with stereo sources raises an error.
+
+##### Source:setPosition(x, y [, z])
+Sets the position of the source, by default this is `0, 0, 0`.
+
+##### Source:getPosition()
+Returns the position of the source.
+
+##### Source:setVelocity(x, y [, z])
+Sets the velocity of the source, which is used for the doppler effect.
+
+##### Source:getVelocity()
+Returns the velocity of the source.
+
+##### Source:setRelative(enable)
+If `enable` is `true` the source's position is relative to the listener (in
+the listener's coordinate system) rather than absolute.
+
+##### Source:isRelative()
+Returns `true` if the source's position is relative to the listener.
+
+##### Source:setAttenuationDistances(reference, max)
+Sets the distance below which the source is played at full volume (by default
+`1`) and the distance beyond which it is no longer attenuated any further.
+
+##### Source:getAttenuationDistances()
+Returns the reference and maximum attenuation distances.
+
+##### Source:setRolloff(rolloff)
+Sets how fast the source is attenuated with distance, by default this is `1`.
+
+##### Source:getRolloff()
+Returns the rolloff factor.
+
+##### Source:setDirection(x, y [, z])
+Sets the direction the source points to. By default this is `0, 0, 0`, which
+means it is omnidirectional.
+
+##### Source:getDirection()
+Returns the direction of the source.
+
+##### Source:setCone(innerAngle, outerAngle [, outerVolume])
+Sets the cone of a directional source: inside `innerAngle` (in radians) the
+source has its full volume, outside `outerAngle` it plays at `outerVolume`
+(by default `0`) and in between the volume is interpolated.
+
+##### Source:getCone()
+Returns the inner angle, outer angle and outer volume of the source's cone.
 
 
 ### SoundData
