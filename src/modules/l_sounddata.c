@@ -58,7 +58,7 @@ sounddata_t *l_sounddata_toSoundData(lua_State *L, int idx) {
   /* Returns the sounddata of the SoundData object at the given index, or NULL
    * if the value is not a SoundData object */
   luaobj_head_t *udata = luaL_testudata(L, idx, CLASS_NAME);
-  if (!udata) {
+  if (!udata || (udata->type & LUAOBJ_RELEASED)) {
     return NULL;
   }
   return ((l_sounddata_t*) (udata + 1))->data;

@@ -230,6 +230,10 @@ int l_spritebatch_draw(lua_State *L) {
   double tx, ty, bx, by;
   int i, start = 0, end = self->count;
 
+  /* The image must not have been released */
+  lua_rawgeti(L, LUA_REGISTRYINDEX, self->imageRef);
+  luaobj_checkudata(L, -1, LUAOBJ_TYPE_IMAGE);
+  lua_pop(L, 1);
   if ((!lua_isnoneornil(L, 4) && lua_tonumber(L, 4) != 0) ||
       (!lua_isnoneornil(L, 5) && lua_tonumber(L, 5) != 1) ||
       (!lua_isnoneornil(L, 6) && lua_tonumber(L, 6) != 1)

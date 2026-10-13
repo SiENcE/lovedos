@@ -12,6 +12,9 @@
 * [love.sound](#lovesound)
 * [love.math](#lovemath)
 * [love.joystick](#lovejoystick)
+* [love.image](#loveimage)
+* [love.window](#lovewindow)
+* [love.data](#lovedata)
 * [love.event](#loveevent)
 
 ##### [Objects](#objects-1)
@@ -21,6 +24,8 @@
 * [SpriteBatch](#spritebatch)
 * [Text](#text)
 * [Joystick](#joystick)
+* [Cursor](#cursor)
+* [Object](#object)
 * [File](#file)
 * [FileData](#filedata)
 * [RandomGenerator](#randomgenerator)
@@ -55,6 +60,11 @@ any; these exist for compatibility.
 
 ### love.system
 Provides access to information about the user's system.
+
+`love.system.getProcessorCount()` returns `1`, `getPowerInfo()` returns
+`"unknown"`, `getClipboardText()` / `setClipboardText()` use a clipboard
+within the program and `openURL()`, `vibrate()` and `hasBackgroundMusic()`
+do nothing; they exist for compatibility with LÖVE.
 
 ##### love.system.getOS()
 Returns the operating system which LoveDOS is running on.
@@ -146,6 +156,31 @@ LÖVE rotation and scaling of the coordinate system are not supported, as these
 would make all of the drawing functions too slow on DOS machines; images can
 still be rotated and scaled individually with `love.graphics.draw()`.
 
+##### love.graphics.intersectScissor(x, y, width, height)
+Sets the scissor to the intersection of the current scissor and the given
+rectangle.
+
+##### love.graphics.getStackDepth()
+Returns the number of transformations on the stack.
+
+##### love.graphics.transformPoint(x, y)
+##### love.graphics.inverseTransformPoint(x, y)
+Convert between the current (translated) coordinates and screen coordinates.
+
+##### love.graphics.setLineWidth(width)
+##### love.graphics.getLineWidth()
+Sets and gets the width of lines, outlines and arcs in pixels; `1` by default.
+Lines wider than a pixel have round joins.
+
+##### love.graphics.setPointSize(size)
+##### love.graphics.getPointSize()
+Sets and gets the size of points in pixels; points larger than a pixel are
+squares.
+
+`love.graphics.setLineStyle()`, `setLineJoin()`, `setDefaultFilter()` and
+their getters store the setting for compatibility; drawing is always done
+pixel by pixel.
+
 ##### love.graphics.reset()
 Resets the font, color, background color, canvas, blend mode, scissor and
 transformation to their defaults.
@@ -189,6 +224,10 @@ table as for `love.graphics.points()`.
 Draws a rectange and the `x`, `y` position of the given `width` and `height`.
 `mode` should be either `"fill"` or `"line"`.
 
+##### love.graphics.arc(mode, [arctype,] x, y, radius, angle1, angle2 [, segments])
+Draws an arc from `angle1` to `angle2` (in radians). `arctype` is `"pie"`
+(the default), `"open"` or `"closed"`.
+
 ##### love.graphics.circle(mode, x, y, radius)
 Draws a circle of a given `radius` with its center at the `x`, `y` position.
 `mode` should be either `"fill"` or `"line"`.
@@ -214,7 +253,8 @@ Draws the `text` string, wrapped at spaces so that no line is wider than
 or `"justify"`.
 
 ##### love.graphics.newImage(filename)
-Creates and returns a new image. `filename` should be the name of an image file.
+Creates and returns a new image. `filename` should be the name of an image file
+(or a [FileData](#filedata)); if an image is given a copy of it is returned.
 LoveDOS is limited to a palette of 255 unique colors in any given game; it is up
 to the user not to exceed this limit.
 
@@ -256,6 +296,19 @@ rendered once and can then be drawn quickly.
 Flips the current screen buffer with the displayed screen buffer. This is
 called automatically after the `love.draw()` callback.
 
+##### love.graphics.captureScreenshot(target)
+Takes a screenshot when the frame is presented: if `target` is a filename the
+screenshot is saved there as PNG, if it is a function it is called with the
+screenshot as an Image.
+
+##### love.graphics.newScreenshot()
+Returns a copy of the screen (LÖVE 0.10).
+
+`getRendererInfo()`, `getStats()`, `getSupported()`, `getSystemLimits()`,
+`getCanvasFormats()`, `getImageFormats()`, `getTextureTypes()`,
+`isGammaCorrect()`, `isActive()`, `getDPIScale()` and `getPixelDimensions()`
+are also provided for compatibility.
+
 
 ### love.timer
 Provides an interface to your system's clock.
@@ -291,8 +344,49 @@ Returns true if any of the given keys are currently pressed.
 Dictates whether repeat `keypressed` events should occur if a key is held down.
 By default this is `false`.
 
+##### love.keyboard.hasKeyRepeat()
+Returns whether key repeat is enabled.
+
+##### love.keyboard.setTextInput(enable)
+##### love.keyboard.hasTextInput()
+Enables or disables the `love.textinput` callback; enabled by default.
+
+LoveDOS' key names are based on the keys' positions, so keys and scancodes
+are the same: `love.keyboard.isScancodeDown()` works like `isDown()` and
+`getKeyFromScancode()` and `getScancodeFromKey()` return their argument.
+`hasScreenKeyboard()` returns `false`.
+
 
 ### love.mouse
+##### love.mouse.setPosition(x, y)
+##### love.mouse.setX(x)
+##### love.mouse.setY(y)
+Move the mouse pointer.
+
+##### love.mouse.setVisible(visible)
+##### love.mouse.isVisible()
+Shows or hides the mouse cursor, which is drawn when the screen is presented.
+Unlike in LÖVE the cursor is hidden by default.
+
+##### love.mouse.newCursor(image, hotx, hoty)
+Returns a new [Cursor](#cursor) using the image (or image file); `hotx`,
+`hoty` is the position within the image which points at the mouse position.
+
+##### love.mouse.getSystemCursor(type)
+Returns the system cursor; all types are an arrow.
+
+##### love.mouse.setCursor([cursor])
+##### love.mouse.getCursor()
+Set and get the cursor shown when the cursor is visible.
+
+##### love.mouse.setRelativeMode(enable)
+##### love.mouse.getRelativeMode()
+In relative mode the cursor is hidden and `love.mousemoved` reports the
+movement of the mouse without it being stopped by the screen's edges.
+
+`love.mouse.setGrabbed()`, `isGrabbed()` and `isCursorSupported()` exist for
+compatibility.
+
 ##### love.mouse.getPosition()
 Returns 2 values: the current horizontal and vertical position of the mouse.
 
@@ -601,26 +695,341 @@ Returns the number of connected joysticks.
 `getGamepadMappingString()` exist for compatibility and have no effect.
 
 
+### love.image
+##### love.image.newImageData(width, height)
+##### love.image.newImageData(filename)
+Returns a new Image: LoveDOS' Images are also LÖVE's ImageData. Compressed
+image formats are not supported.
+
+
+### love.window
+LoveDOS always runs fullscreen at 320x200 in 256 colors.
+
+##### love.window.setVSync(vsync)
+##### love.window.getVSync()
+If `vsync` is `1` presenting waits for the VGA's vertical retrace, which
+avoids tearing but limits the frame rate to 70 frames per second. Disabled by
+default; it can also be set with `t.window.vsync` in
+[conf.lua](#configuration-conflua).
+
+##### love.window.showMessageBox(title, message [, buttons])
+Shows the message on screen until a key is pressed.
+
+The other functions of LÖVE's `love.window` exist for compatibility:
+`getMode()` returns `320, 200` and the flags, `setMode()` returns whether the
+requested size is 320x200, `getTitle()` and `setTitle()` store the title and
+functions like `getFullscreen()`, `hasFocus()`, `getDPIScale()`,
+`getDesktopDimensions()` and `getSafeArea()` describe the screen.
+
+
+### love.data
+##### love.data.encode(container, format, source [, linelength])
+##### love.data.decode(container, format, source)
+Encode and decode data as `"base64"` or `"hex"`. `container` is `"string"`
+or `"data"` (a ByteData object with `getString()` and `getSize()`).
+
+##### love.data.newByteData(string or size)
+Returns a ByteData object.
+
+##### love.data.pack(container, format, ...)
+##### love.data.unpack(format, data [, position])
+##### love.data.getPackedSize(format)
+Pack and unpack values into binary data with the format options of Lua 5.3's
+`string.pack`: `<`, `>`, `=`, `b`, `B`, `h`, `H`, `i[n]`, `I[n]`, `l`, `L`,
+`j`, `J`, `f`, `d`, `n`, `s[n]`, `z` and `x`. Compression and hashing are not
+available.
+
+
 ### love.event
-##### love.event.quit([status])
+##### love.image
+##### love.image.newImageData(width, height)
+##### love.image.newImageData(filename)
+Returns a new Image: LoveDOS' Images are also LÖVE's ImageData. Compressed
+image formats are not supported.
+
+
+### love.window
+LoveDOS always runs fullscreen at 320x200 in 256 colors.
+
+##### love.window.setVSync(vsync)
+##### love.window.getVSync()
+If `vsync` is `1` presenting waits for the VGA's vertical retrace, which
+avoids tearing but limits the frame rate to 70 frames per second. Disabled by
+default; it can also be set with `t.window.vsync` in
+[conf.lua](#configuration-conflua).
+
+##### love.window.showMessageBox(title, message [, buttons])
+Shows the message on screen until a key is pressed.
+
+The other functions of LÖVE's `love.window` exist for compatibility:
+`getMode()` returns `320, 200` and the flags, `setMode()` returns whether the
+requested size is 320x200, `getTitle()` and `setTitle()` store the title and
+functions like `getFullscreen()`, `hasFocus()`, `getDPIScale()`,
+`getDesktopDimensions()` and `getSafeArea()` describe the screen.
+
+
+### love.data
+##### love.data.encode(container, format, source [, linelength])
+##### love.data.decode(container, format, source)
+Encode and decode data as `"base64"` or `"hex"`. `container` is `"string"`
+or `"data"` (a ByteData object with `getString()` and `getSize()`).
+
+##### love.data.newByteData(string or size)
+Returns a ByteData object.
+
+##### love.data.pack(container, format, ...)
+##### love.data.unpack(format, data [, position])
+##### love.data.getPackedSize(format)
+Pack and unpack values into binary data with the format options of Lua 5.3's
+`string.pack`: `<`, `>`, `=`, `b`, `B`, `h`, `H`, `i[n]`, `I[n]`, `l`, `L`,
+`j`, `J`, `f`, `d`, `n`, `s[n]`, `z` and `x`. Compression and hashing are not
+available.
+
+
+### love.event.quit([status])
 Pushes the `quit` event with the given `status`. `status` is `0` by default.
 
-##### love.event.push(name, ...)
+##### love.image
+##### love.image.newImageData(width, height)
+##### love.image.newImageData(filename)
+Returns a new Image: LoveDOS' Images are also LÖVE's ImageData. Compressed
+image formats are not supported.
+
+
+### love.window
+LoveDOS always runs fullscreen at 320x200 in 256 colors.
+
+##### love.window.setVSync(vsync)
+##### love.window.getVSync()
+If `vsync` is `1` presenting waits for the VGA's vertical retrace, which
+avoids tearing but limits the frame rate to 70 frames per second. Disabled by
+default; it can also be set with `t.window.vsync` in
+[conf.lua](#configuration-conflua).
+
+##### love.window.showMessageBox(title, message [, buttons])
+Shows the message on screen until a key is pressed.
+
+The other functions of LÖVE's `love.window` exist for compatibility:
+`getMode()` returns `320, 200` and the flags, `setMode()` returns whether the
+requested size is 320x200, `getTitle()` and `setTitle()` store the title and
+functions like `getFullscreen()`, `hasFocus()`, `getDPIScale()`,
+`getDesktopDimensions()` and `getSafeArea()` describe the screen.
+
+
+### love.data
+##### love.data.encode(container, format, source [, linelength])
+##### love.data.decode(container, format, source)
+Encode and decode data as `"base64"` or `"hex"`. `container` is `"string"`
+or `"data"` (a ByteData object with `getString()` and `getSize()`).
+
+##### love.data.newByteData(string or size)
+Returns a ByteData object.
+
+##### love.data.pack(container, format, ...)
+##### love.data.unpack(format, data [, position])
+##### love.data.getPackedSize(format)
+Pack and unpack values into binary data with the format options of Lua 5.3's
+`string.pack`: `<`, `>`, `=`, `b`, `B`, `h`, `H`, `i[n]`, `I[n]`, `l`, `L`,
+`j`, `J`, `f`, `d`, `n`, `s[n]`, `z` and `x`. Compression and hashing are not
+available.
+
+
+### love.event.push(name, ...)
 Adds an event to the queue. The default `love.run()` calls
 `love.handlers[name](...)` for each event; add a function to `love.handlers`
 to handle custom events.
 
-##### love.event.poll()
+##### love.image
+##### love.image.newImageData(width, height)
+##### love.image.newImageData(filename)
+Returns a new Image: LoveDOS' Images are also LÖVE's ImageData. Compressed
+image formats are not supported.
+
+
+### love.window
+LoveDOS always runs fullscreen at 320x200 in 256 colors.
+
+##### love.window.setVSync(vsync)
+##### love.window.getVSync()
+If `vsync` is `1` presenting waits for the VGA's vertical retrace, which
+avoids tearing but limits the frame rate to 70 frames per second. Disabled by
+default; it can also be set with `t.window.vsync` in
+[conf.lua](#configuration-conflua).
+
+##### love.window.showMessageBox(title, message [, buttons])
+Shows the message on screen until a key is pressed.
+
+The other functions of LÖVE's `love.window` exist for compatibility:
+`getMode()` returns `320, 200` and the flags, `setMode()` returns whether the
+requested size is 320x200, `getTitle()` and `setTitle()` store the title and
+functions like `getFullscreen()`, `hasFocus()`, `getDPIScale()`,
+`getDesktopDimensions()` and `getSafeArea()` describe the screen.
+
+
+### love.data
+##### love.data.encode(container, format, source [, linelength])
+##### love.data.decode(container, format, source)
+Encode and decode data as `"base64"` or `"hex"`. `container` is `"string"`
+or `"data"` (a ByteData object with `getString()` and `getSize()`).
+
+##### love.data.newByteData(string or size)
+Returns a ByteData object.
+
+##### love.data.pack(container, format, ...)
+##### love.data.unpack(format, data [, position])
+##### love.data.getPackedSize(format)
+Pack and unpack values into binary data with the format options of Lua 5.3's
+`string.pack`: `<`, `>`, `=`, `b`, `B`, `h`, `H`, `i[n]`, `I[n]`, `l`, `L`,
+`j`, `J`, `f`, `d`, `n`, `s[n]`, `z` and `x`. Compression and hashing are not
+available.
+
+
+### love.event.poll()
 Returns an iterator over the queued events:
 `for name, a, b, c, d, e, f in love.event.poll() do ... end`.
 
-##### love.event.pump()
+##### love.image
+##### love.image.newImageData(width, height)
+##### love.image.newImageData(filename)
+Returns a new Image: LoveDOS' Images are also LÖVE's ImageData. Compressed
+image formats are not supported.
+
+
+### love.window
+LoveDOS always runs fullscreen at 320x200 in 256 colors.
+
+##### love.window.setVSync(vsync)
+##### love.window.getVSync()
+If `vsync` is `1` presenting waits for the VGA's vertical retrace, which
+avoids tearing but limits the frame rate to 70 frames per second. Disabled by
+default; it can also be set with `t.window.vsync` in
+[conf.lua](#configuration-conflua).
+
+##### love.window.showMessageBox(title, message [, buttons])
+Shows the message on screen until a key is pressed.
+
+The other functions of LÖVE's `love.window` exist for compatibility:
+`getMode()` returns `320, 200` and the flags, `setMode()` returns whether the
+requested size is 320x200, `getTitle()` and `setTitle()` store the title and
+functions like `getFullscreen()`, `hasFocus()`, `getDPIScale()`,
+`getDesktopDimensions()` and `getSafeArea()` describe the screen.
+
+
+### love.data
+##### love.data.encode(container, format, source [, linelength])
+##### love.data.decode(container, format, source)
+Encode and decode data as `"base64"` or `"hex"`. `container` is `"string"`
+or `"data"` (a ByteData object with `getString()` and `getSize()`).
+
+##### love.data.newByteData(string or size)
+Returns a ByteData object.
+
+##### love.data.pack(container, format, ...)
+##### love.data.unpack(format, data [, position])
+##### love.data.getPackedSize(format)
+Pack and unpack values into binary data with the format options of Lua 5.3's
+`string.pack`: `<`, `>`, `=`, `b`, `B`, `h`, `H`, `i[n]`, `I[n]`, `l`, `L`,
+`j`, `J`, `f`, `d`, `n`, `s[n]`, `z` and `x`. Compression and hashing are not
+available.
+
+
+### love.event.pump()
 Adds the events from the keyboard, mouse and joysticks to the queue.
 
-##### love.event.wait()
+##### love.image
+##### love.image.newImageData(width, height)
+##### love.image.newImageData(filename)
+Returns a new Image: LoveDOS' Images are also LÖVE's ImageData. Compressed
+image formats are not supported.
+
+
+### love.window
+LoveDOS always runs fullscreen at 320x200 in 256 colors.
+
+##### love.window.setVSync(vsync)
+##### love.window.getVSync()
+If `vsync` is `1` presenting waits for the VGA's vertical retrace, which
+avoids tearing but limits the frame rate to 70 frames per second. Disabled by
+default; it can also be set with `t.window.vsync` in
+[conf.lua](#configuration-conflua).
+
+##### love.window.showMessageBox(title, message [, buttons])
+Shows the message on screen until a key is pressed.
+
+The other functions of LÖVE's `love.window` exist for compatibility:
+`getMode()` returns `320, 200` and the flags, `setMode()` returns whether the
+requested size is 320x200, `getTitle()` and `setTitle()` store the title and
+functions like `getFullscreen()`, `hasFocus()`, `getDPIScale()`,
+`getDesktopDimensions()` and `getSafeArea()` describe the screen.
+
+
+### love.data
+##### love.data.encode(container, format, source [, linelength])
+##### love.data.decode(container, format, source)
+Encode and decode data as `"base64"` or `"hex"`. `container` is `"string"`
+or `"data"` (a ByteData object with `getString()` and `getSize()`).
+
+##### love.data.newByteData(string or size)
+Returns a ByteData object.
+
+##### love.data.pack(container, format, ...)
+##### love.data.unpack(format, data [, position])
+##### love.data.getPackedSize(format)
+Pack and unpack values into binary data with the format options of Lua 5.3's
+`string.pack`: `<`, `>`, `=`, `b`, `B`, `h`, `H`, `i[n]`, `I[n]`, `l`, `L`,
+`j`, `J`, `f`, `d`, `n`, `s[n]`, `z` and `x`. Compression and hashing are not
+available.
+
+
+### love.event.wait()
 Waits for an event and returns it.
 
-##### love.event.clear()
+##### love.image
+##### love.image.newImageData(width, height)
+##### love.image.newImageData(filename)
+Returns a new Image: LoveDOS' Images are also LÖVE's ImageData. Compressed
+image formats are not supported.
+
+
+### love.window
+LoveDOS always runs fullscreen at 320x200 in 256 colors.
+
+##### love.window.setVSync(vsync)
+##### love.window.getVSync()
+If `vsync` is `1` presenting waits for the VGA's vertical retrace, which
+avoids tearing but limits the frame rate to 70 frames per second. Disabled by
+default; it can also be set with `t.window.vsync` in
+[conf.lua](#configuration-conflua).
+
+##### love.window.showMessageBox(title, message [, buttons])
+Shows the message on screen until a key is pressed.
+
+The other functions of LÖVE's `love.window` exist for compatibility:
+`getMode()` returns `320, 200` and the flags, `setMode()` returns whether the
+requested size is 320x200, `getTitle()` and `setTitle()` store the title and
+functions like `getFullscreen()`, `hasFocus()`, `getDPIScale()`,
+`getDesktopDimensions()` and `getSafeArea()` describe the screen.
+
+
+### love.data
+##### love.data.encode(container, format, source [, linelength])
+##### love.data.decode(container, format, source)
+Encode and decode data as `"base64"` or `"hex"`. `container` is `"string"`
+or `"data"` (a ByteData object with `getString()` and `getSize()`).
+
+##### love.data.newByteData(string or size)
+Returns a ByteData object.
+
+##### love.data.pack(container, format, ...)
+##### love.data.unpack(format, data [, position])
+##### love.data.getPackedSize(format)
+Pack and unpack values into binary data with the format options of Lua 5.3's
+`string.pack`: `<`, `>`, `=`, `b`, `B`, `h`, `H`, `i[n]`, `I[n]`, `l`, `L`,
+`j`, `J`, `f`, `d`, `n`, `s[n]`, `z` and `x`. Compression and hashing are not
+available.
+
+
+### love.event.clear()
 Removes all queued events.
 
 
@@ -641,6 +1050,25 @@ Returns the height in pixels of the image.
 Returns the color of the pixel at the position `x`, `y` of the image. If the
 position is out of bounds or the pixel is set to transparent then `nil` is
 returned.
+
+##### Image:paste(source, dx, dy [, sx, sy, sw, sh])
+Copies pixels (including transparent ones) from the `source` image.
+
+##### Image:mapPixel(func [, x, y, width, height])
+Calls `func(x, y, r, g, b, a)` for every pixel and sets the pixel to the
+returned color; a returned alpha below half makes the pixel transparent.
+
+##### Image:encode(format [, filename])
+Encodes the image as `"png"`, `"tga"` or `"bmp"` and returns it as
+[FileData](#filedata); if `filename` is given it is also written to the save
+directory.
+
+##### Image:renderTo(func)
+Calls `func` with the image as the current canvas.
+
+LÖVE's Texture methods (`getFilter()`, `setFilter()`, `getWrap()`,
+`getFormat()`, `getPixelDimensions()`, `getDPIScale()`, ...) are provided for
+compatibility.
 
 ##### Image:setPixel(x, y [, red, green, blue])
 Sets the pixel of the image at position `x`, `y` to the given color; if no color
@@ -670,6 +1098,19 @@ returned.
 
 ##### Font:getHeight()
 Returns the height of the font in pixels.
+
+##### Font:getAscent()
+##### Font:getDescent()
+##### Font:getBaseline()
+Return the font's ascent (and baseline) and descent in pixels.
+
+##### Font:setLineHeight(height)
+##### Font:getLineHeight()
+Sets and gets the spacing of lines as a multiple of the font's height; `1` by
+default.
+
+##### Font:hasGlyphs(text or codepoint, ...)
+Returns `true` if the font has glyphs for all the characters.
 
 ##### Font:getWrap(text, limit)
 Returns the width of the widest line and a table containing the lines the
@@ -951,6 +1392,21 @@ Return the size of the text in pixels.
 Gets and sets the font used by the text.
 
 
+### Cursor
+A mouse cursor, created with `love.mouse.newCursor()` or `getSystemCursor()`.
+`Cursor:getType()` returns `"image"` or the system cursor's type.
+
+
+### Object
+All objects have the methods `type()`, which returns the object's type (eg.
+`"Image"`), `typeOf(name)`, which returns `true` if the object is of the type
+or one of its supertypes (an Image is also a `"Texture"`, `"Drawable"`,
+`"Canvas"`, `"ImageData"` and `"Object"`), and `release()`, which frees the
+object's resources immediately rather than when it is garbage collected.
+Released objects can't be used anymore; the current font and canvas can't be
+released.
+
+
 ### Joystick
 A gameport joystick. `Joystick:getAxis(i)` returns the position of axis `i`
 (`1` horizontal, `2` vertical) from `-1` to `1`, `getAxes()` both positions,
@@ -1080,6 +1536,10 @@ Called when a joystick button is pressed or released.
 
 ##### love.joystickaxis(joystick, axis, value)
 Called when a joystick axis moves; `value` is from `-1` to `1`.
+
+##### love.wheelmoved(x, y)
+Called when the mouse wheel is turned; `y` is positive when turned away from
+the user. Needs a CuteMouse compatible mouse driver.
 
 ##### love.mousereleased(x, y, button)
 Called when the user releases a mouse button. `x` and `y` are the mouse's

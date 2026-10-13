@@ -43,6 +43,11 @@ int l_event_poll(lua_State *L) {
         lua_pushnumber(L, e.mouse.dy);
         return 5;
 
+      case EVENT_MOUSE_WHEELMOVED:
+        lua_pushnumber(L, e.mouse.dx);
+        lua_pushnumber(L, e.mouse.dy);
+        return 3;
+
       case EVENT_MOUSE_PRESSED:
       case EVENT_MOUSE_RELEASED:
         lua_pushnumber(L, e.mouse.x);

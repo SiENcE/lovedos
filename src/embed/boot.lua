@@ -72,6 +72,9 @@ function love.boot()
   } do
     love.handlers[name] = makewrapper(name)
   end
+  if love.keyboard then
+    love.handlers.textinput = love.keyboard._filterTextInput(love.handlers.textinput)
+  end
 
   -- Try to mount .exe file (a packaged game), then the first argument
   for i, v in ipairs { love.argv[1], love.argv[2] } do
@@ -112,6 +115,9 @@ function love.boot()
   end
   if love.joystick then
     love.joystick._init()
+  end
+  if love.window then
+    love.window._init(conf.window)
   end
 
   -- Init the save directory

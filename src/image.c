@@ -56,38 +56,26 @@ image_rect_t image_getClip(int bufw, int bufh) {
 
 
 
-const char *image_init(image_t *self, const char *filename) {
-  /* Loads an image file into the struct and inits the mask */
+const char *image_initFromMemory(image_t *self, const void *filedata,
+                                 int size) {
+  /* Loads an image file's data into the struct and inits the mask */
   const char *errmsg = NULL;
-  void *filedata = NULL;
   unsigned char *data32 = NULL;
   memset(self, 0, sizeof(*self));
-
-  /* Load file data */
-  int size;
-  filedata = filesystem_read(filename, &size);
-  if (!filedata) {
-    errmsg = "could not read file";
-    goto fail;
-  }
 
   /* Load 32bit image data */
   int width, height, n;
   data32 = stbi_load_from_memory(filedata, size, &width, &height, &n, 4);
   if (!data32) {
-    errmsg = "could not load image file";
-    goto fail;
+    return "could not load image file";
   }
-
-  /* Free file data */
-  filesystem_free(filedata);
-  filedata = NULL;
 
   /* Set dimensions and allocate memory */
   int sz = width * height;
   self->width = width;
   self->height = height;
   self->data = dmt_malloc(sz);
+  self->mask = dmt_malloc(sz);
 
   /* Load pixels into struct, converting 32bit to 8bit paletted */
   int i;
@@ -100,26 +88,32 @@ const char *image_init(image_t *self, const char *filename) {
     int idx = palette_colorToIdx(r, g, b);
     if (idx < 0) {
       errmsg = "color palette exhausted: use fewer unique colors";
-      goto fail;
+      break;
     }
     self->data[i] = (a >= 127) ? idx : 0;
   }
 
   /* Init mask */
-  self->mask = dmt_malloc(sz);
   for (i = 0; i < sz; i++) {
     self->mask[i] = (self->data[i] == 0) ? 0xFF : 0x00;
   }
 
-  /* Free 32bit pixel data, return NULL for no error */
   free(data32);
-  data32 = NULL;
+  return errmsg;
+}
 
-  return NULL;
 
-fail:
+const char *image_init(image_t *self, const char *filename) {
+  /* Loads an image file into the struct and inits the mask */
+  const char *errmsg;
+  int size;
+  void *filedata = filesystem_read(filename, &size);
+  if (!filedata) {
+    memset(self, 0, sizeof(*self));
+    return "could not read file";
+  }
+  errmsg = image_initFromMemory(self, filedata, size);
   filesystem_free(filedata);
-  free(data32);
   return errmsg;
 }
 

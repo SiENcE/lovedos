@@ -21,5 +21,10 @@ void mouse_update(void);
 int mouse_isDown(int button);
 int mouse_getX(void);
 int mouse_getY(void);
+void mouse_setPosition(int x, int y);
+void mouse_setRelativeMode(int enable);
+
+extern int mouse_inited;
+extern int mouse_relative;
 
 #endif

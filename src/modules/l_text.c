@@ -125,8 +125,10 @@ static void measureSpan(void *udata, const char *str, int len, int x, int y) {
   for (i = 0; i < len; i++) lines += str[i] == '\n';
   font_getBounds(font, str, len, x, y, &m->bounds);
   if (x + w > m->text->width) m->text->width = x + w;
-  if (y + lines * font->height > m->text->height) {
-    m->text->height = y + lines * font->height;
+  if (y + (lines - 1) * font_getLineSpacing(font) + font->height >
+      m->text->height) {
+    m->text->height = y + (lines - 1) * font_getLineSpacing(font) +
+                      font->height;
   }
 }
 
@@ -135,6 +137,14 @@ static void renderSpan(void *udata, const char *str, int len, int x, int y) {
   text_t *self = udata;
   font_blit(self->font, self->image.data, self->image.width,
             self->image.height, str, len, x - self->ox, y - self->oy);
+}
+
+
+static void checkFont(lua_State *L, text_t *self) {
+  /* The font must not have been released */
+  lua_rawgeti(L, LUA_REGISTRYINDEX, self->fontRef);
+  luaobj_checkudata(L, -1, LUAOBJ_TYPE_FONT);
+  lua_pop(L, 1);
 }
 
 
@@ -288,6 +298,7 @@ int l_text_getFont(lua_State *L) {
 
 int l_text_getWidth(lua_State *L) {
   text_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
+  checkFont(L, self);
   render(self);
   lua_pushinteger(L, self->width);
   return 1;
@@ -296,6 +307,7 @@ int l_text_getWidth(lua_State *L) {
 
 int l_text_getHeight(lua_State *L) {
   text_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
+  checkFont(L, self);
   render(self);
   lua_pushinteger(L, self->height);
   return 1;
@@ -304,6 +316,7 @@ int l_text_getHeight(lua_State *L) {
 
 int l_text_getDimensions(lua_State *L) {
   text_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
+  checkFont(L, self);
   render(self);
   lua_pushinteger(L, self->width);
   lua_pushinteger(L, self->height);
@@ -315,6 +328,7 @@ int l_text_draw(lua_State *L) {
   /* love.graphics.draw(text, x, y, r, sx, sy, ox, oy) */
   text_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
   int oldBlendMode = image_blendMode;
+  checkFont(L, self);
   render(self);
   if (!self->hasImage) return 0;
   /* Like print(), text is drawn in the current color */

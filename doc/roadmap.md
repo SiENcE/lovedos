@@ -69,30 +69,30 @@ Status: `[ ]` todo, `[x]` done.
 
 - [x] `love.event.push`, `clear`, `wait` (custom events reach
       `love.handlers` / `love.<name>` callbacks)
-- [ ] `love.mouse`: `setPosition`, `setX`, `setY`, `setVisible`/`isVisible`
+- [x] `love.mouse`: `setPosition`, `setX`, `setY`, `setVisible`/`isVisible`
       (software cursor), `setRelativeMode`/`getRelativeMode`,
       `setGrabbed`/`isGrabbed`, `isCursorSupported`, `newCursor`,
       `setCursor`/`getCursor`, `getSystemCursor`; the `wheelmoved` callback
       with CuteMouse compatible drivers
-- [ ] `love.keyboard`: `hasKeyRepeat`, `isScancodeDown`,
+- [x] `love.keyboard`: `hasKeyRepeat`, `isScancodeDown`,
       `getKeyFromScancode`, `getScancodeFromKey`, `setTextInput`,
       `hasTextInput`, `hasScreenKeyboard`
-- [ ] `love.graphics`: `arc`, `setLineWidth`/`getLineWidth`,
+- [x] `love.graphics`: `arc`, `setLineWidth`/`getLineWidth`,
       `setPointSize`/`getPointSize`, `setLineStyle`/`getLineStyle`,
       `setLineJoin`/`getLineJoin`, `intersectScissor`, `getStackDepth`,
       `transformPoint`, `inverseTransformPoint`, `captureScreenshot`,
       `newImageData` (Image doubles as ImageData), `setNewFont`,
       `setDefaultFilter`/`getDefaultFilter`
-- [ ] `ImageData:paste`, `mapPixel`, `encode` (BMP/TGA/PNG), `getFormat`;
+- [x] `ImageData:paste`, `mapPixel`, `encode` (BMP/TGA/PNG), `getFormat`;
       `Image`/`Canvas` texture methods (`getFilter`, `setFilter`, `getWrap`,
       `setWrap`, `getPixelDimensions`, `getDPIScale`, ...)
-- [ ] `Font`: `getAscent`, `getDescent`, `getBaseline`, `getLineHeight`,
+- [x] `Font`: `getAscent`, `getDescent`, `getBaseline`, `getLineHeight`,
       `setLineHeight`, `hasGlyphs`, `getKerning`, `setFallbacks`,
       `getFilter`/`setFilter`, `getDPIScale`
-- [ ] `Object:type`, `Object:typeOf`, `Object:release` for all objects
-- [ ] `love.window.setVSync`/`getVSync`: wait for the VGA vertical retrace
+- [x] `Object:type`, `Object:typeOf`, `Object:release` for all objects
+- [x] `love.window.setVSync`/`getVSync`: wait for the VGA vertical retrace
       for tear-free output
-- [ ] `love.data`: `encode`/`decode` (base64, hex), `newByteData`, `pack`,
+- [x] `love.data`: `encode`/`decode` (base64, hex), `newByteData`, `pack`,
       `unpack`, `getPackedSize`
 
 
@@ -101,7 +101,7 @@ Status: `[ ]` todo, `[x]` done.
 Functions which have nothing to do on DOS but are often called by LÖVE games,
 so that ports don't need changes:
 
-- [ ] `love.window`: `getMode`, `setMode`, `updateMode`, `getTitle`,
+- [x] `love.window`: `getMode`, `setMode`, `updateMode`, `getTitle`,
       `setTitle`, `getFullscreen`, `setFullscreen`, `getFullscreenModes`,
       `getDesktopDimensions`, `getDisplayCount`, `getDisplayName`,
       `getDisplayOrientation`, `getDPIScale`, `toPixels`, `fromPixels`,
@@ -110,10 +110,10 @@ so that ports don't need changes:
       `requestAttention`, `getPosition`, `setPosition`, `getIcon`, `setIcon`,
       `isDisplaySleepEnabled`, `setDisplaySleepEnabled`, `showMessageBox`,
       `close`
-- [ ] `love.system`: `getProcessorCount`, `getPowerInfo`,
+- [x] `love.system`: `getProcessorCount`, `getPowerInfo`,
       `getClipboardText`/`setClipboardText` (within the program),
       `openURL`, `vibrate`, `hasBackgroundMusic`
-- [ ] `love.graphics`: `getRendererInfo`, `getStats`, `getSupported`,
+- [x] `love.graphics`: `getRendererInfo`, `getStats`, `getSupported`,
       `getSystemLimits`, `getCanvasFormats`, `getImageFormats`,
       `getTextureTypes`, `isGammaCorrect`, `isActive`, `getDPIScale`,
       `getPixelDimensions`, `getPixelWidth`, `getPixelHeight`

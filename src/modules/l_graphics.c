@@ -37,6 +37,10 @@ static transform_t graphics_transform;
 static transform_t graphics_transformStack[TRANSFORM_STACK_MAX];
 static int graphics_transformStackSize;
 
+/* Width of lines and size of points in pixels */
+static double graphics_lineWidth = 1;
+static double graphics_pointSize = 1;
+
 /* Scissor rectangle, in screen coordinates */
 static int graphics_scissor;
 static int graphics_scissorRect[4];
@@ -283,9 +287,100 @@ int l_graphics_clear(lua_State *L) {
 }
 
 
+/* Software mouse cursor, drawn over the screen when it is presented */
+static image_t *graphics_cursor;
+static int graphics_cursorRef = LUA_NOREF;
+static int graphics_cursorX, graphics_cursorY;
+
+int mouse_getX(void);
+int mouse_getY(void);
+extern int mouse_inited;
+extern int mouse_relative;
+
+
 int l_graphics_present(lua_State *L) {
+  static pixel_t *saved;
+  static int savedSize;
+  image_t *c = graphics_cursor;
+  int x = mouse_getX() - graphics_cursorX, y = mouse_getY() - graphics_cursorY;
+  int i, w = 0, h = 0, x0 = 0, y0 = 0, oldBlend = image_blendMode;
+  image_rect_t oldClip = image_clip;
+
+  if (!c || !mouse_inited || mouse_relative) {
+    vga_update(graphics_screen->data);
+    return 0;
+  }
+  /* Draw the cursor, present, then restore the pixels under it */
+  x0 = x < 0 ? 0 : x;
+  y0 = y < 0 ? 0 : y;
+  w = (x + c->width > VGA_WIDTH ? VGA_WIDTH : x + c->width) - x0;
+  h = (y + c->height > VGA_HEIGHT ? VGA_HEIGHT : y + c->height) - y0;
+  if (w > 0 && h > 0) {
+    if (w * h > savedSize) {
+      savedSize = w * h;
+      saved = realloc(saved, savedSize);
+    }
+    for (i = 0; i < h; i++) {
+      memcpy(saved + i * w, graphics_screen->data + x0 + (y0 + i) * VGA_WIDTH, w);
+    }
+    image_setClip(INT_MIN, INT_MIN, INT_MAX, INT_MAX);
+    image_setBlendMode(IMAGE_NORMAL);
+    image_setFlip(0);
+    image_blit(c, graphics_screen->data, VGA_WIDTH, VGA_HEIGHT, x, y,
+               0, 0, c->width, c->height);
+    image_clip = oldClip;
+    image_setBlendMode(oldBlend);
+  }
   vga_update(graphics_screen->data);
+  for (i = 0; i < h && w > 0; i++) {
+    memcpy(graphics_screen->data + x0 + (y0 + i) * VGA_WIDTH, saved + i * w, w);
+  }
   return 0;
+}
+
+
+int l_graphics_setCursor(lua_State *L) {
+  /* Internal: _setCursor(image, hotx, hoty), or _setCursor() to hide it */
+  luaL_unref(L, LUA_REGISTRYINDEX, graphics_cursorRef);
+  graphics_cursorRef = LUA_NOREF;
+  graphics_cursor = NULL;
+  if (!lua_isnoneornil(L, 1)) {
+    graphics_cursor = luaobj_checkudata(L, 1, LUAOBJ_TYPE_IMAGE);
+    graphics_cursorX = luaL_optnumber(L, 2, 0);
+    graphics_cursorY = luaL_optnumber(L, 3, 0);
+    lua_pushvalue(L, 1);
+    graphics_cursorRef = luaL_ref(L, LUA_REGISTRYINDEX);
+  }
+  return 0;
+}
+
+
+int l_graphics_setVSync(lua_State *L) {
+  /* Internal: used by love.window.setVSync() */
+  vga_setVSync(lua_toboolean(L, 1));
+  return 0;
+}
+
+
+int l_graphics_getVSync(lua_State *L) {
+  lua_pushboolean(L, vga_getVSync());
+  return 1;
+}
+
+
+int l_graphics_getTranslation(lua_State *L) {
+  /* Internal: returns the current translation */
+  lua_pushnumber(L, graphics_transform.x);
+  lua_pushnumber(L, graphics_transform.y);
+  return 2;
+}
+
+
+int l_graphics_getScreen(lua_State *L) {
+  /* Internal: pushes the screen's Image */
+  lua_pushlightuserdata(L, &graphics_screen);
+  lua_gettable(L, LUA_REGISTRYINDEX);
+  return 1;
 }
 
 
@@ -419,11 +514,31 @@ static int getNumbers(lua_State *L, int idx, double **out) {
 }
 
 
+static void fillDisc(const image_rect_t *clip, double x, double y, double r);
+static void fillRing(const image_rect_t *clip, double cx, double cy,
+                     double rxo, double ryo, double rxi, double ryi);
+static void fillPolygon(const image_rect_t *clip, const double *v, int n);
+
+
+static void drawPoint(const image_rect_t *clip, double x, double y) {
+  /* Points larger than a pixel are squares centered on the point */
+  int i, s, x0, y0;
+  if (graphics_pointSize <= 1) {
+    plot(clip, toX(x), toY(y));
+    return;
+  }
+  s = graphics_pointSize + 0.5;
+  x0 = toX(x - s / 2.);
+  y0 = toY(y - s / 2.);
+  for (i = 0; i < s; i++) {
+    hline(clip, x0, x0 + s, y0 + i);
+  }
+}
+
+
 int l_graphics_point(lua_State *L) {
   image_rect_t clip = getClip();
-  int x = toX(luaL_checknumber(L, 1));
-  int y = toY(luaL_checknumber(L, 2));
-  plot(&clip, x, y);
+  drawPoint(&clip, luaL_checknumber(L, 1), luaL_checknumber(L, 2));
   return 0;
 }
 
@@ -434,7 +549,7 @@ int l_graphics_points(lua_State *L) {
   double *v;
   int i, n = getNumbers(L, 1, &v);
   for (i = 0; i < n; i += 2) {
-    plot(&clip, toX(v[i]), toY(v[i + 1]));
+    drawPoint(&clip, v[i], v[i + 1]);
   }
   return 0;
 }
@@ -472,9 +587,37 @@ static void drawLine(const image_rect_t *clip, int x0, int y0, int x1, int y1) {
 }
 
 
+static void thickSegment(const image_rect_t *clip, double x0, double y0,
+                         double x1, double y1) {
+  /* A line wider than a pixel is drawn as a filled rectangle */
+  double dx = x1 - x0, dy = y1 - y0, len = sqrt(dx * dx + dy * dy), q[8];
+  double nx, ny;
+  if (len == 0) return;
+  nx = -dy / len * graphics_lineWidth / 2;
+  ny = dx / len * graphics_lineWidth / 2;
+  q[0] = x0 + nx; q[1] = y0 + ny;
+  q[2] = x1 + nx; q[3] = y1 + ny;
+  q[4] = x1 - nx; q[5] = y1 - ny;
+  q[6] = x0 - nx; q[7] = y0 - ny;
+  fillPolygon(clip, q, 8);
+}
+
+
 static void drawPolyline(const image_rect_t *clip, const double *v, int n,
                          int closed) {
   int i;
+  if (graphics_lineWidth > 1) {
+    /* Wide lines: a rectangle per segment, with round joins */
+    for (i = 0; i + 3 < n; i += 2) {
+      thickSegment(clip, v[i], v[i + 1], v[i + 2], v[i + 3]);
+      if (i > 0 || closed) fillDisc(clip, v[i], v[i + 1], graphics_lineWidth / 2);
+    }
+    if (closed && n >= 4) {
+      thickSegment(clip, v[n - 2], v[n - 1], v[0], v[1]);
+      fillDisc(clip, v[n - 2], v[n - 1], graphics_lineWidth / 2);
+    }
+    return;
+  }
   for (i = 0; i + 3 < n; i += 2) {
     drawLine(clip, toX(v[i]), toY(v[i + 1]), toX(v[i + 2]), toY(v[i + 3]));
   }
@@ -510,6 +653,17 @@ int l_graphics_rectangle(lua_State *L) {
   if (x2 < x) { int t = x; x = x2; x2 = t; }
   if (y2 < y) { int t = y; y = y2; y2 = t; }
   if (x == x2 || y == y2) return 0;
+  if (!fill && graphics_lineWidth > 1) {
+    /* A wide outline is centered on the rectangle's edges */
+    int w = graphics_lineWidth + 0.5, a = w / 2, b = w - a;
+    for (i = y - a; i < y + b; i++) hline(&clip, x - a, x2 + a, i);
+    for (i = y2 - b; i < y2 + a; i++) hline(&clip, x - a, x2 + a, i);
+    for (i = y + b; i < y2 - b; i++) {
+      hline(&clip, x - a, x + b, i);
+      hline(&clip, x2 - b, x2 + a, i);
+    }
+    return 0;
+  }
   if (fill) {
     /* Clip once, then fill the rows */
     pixel_t *p;
@@ -541,6 +695,12 @@ int l_graphics_circle(lua_State *L) {
   int radius = luaL_checknumber(L, 4);
   image_rect_t clip = getClip();
   int dx = radius, dy = 0;
+  if (!fill && graphics_lineWidth > 1) {
+    double w = graphics_lineWidth / 2;
+    fillRing(&clip, luaL_checknumber(L, 2), luaL_checknumber(L, 3),
+             radius + w, radius + w, radius - w, radius - w);
+    return 0;
+  }
   int radiusError = 1 - dx;
   while (dx >= dy) {
     if (fill) {
@@ -567,6 +727,36 @@ int l_graphics_circle(lua_State *L) {
     }
   }
   return 0;
+}
+
+
+static void fillRing(const image_rect_t *clip, double cx, double cy,
+                     double rxo, double ryo, double rxi, double ryi) {
+  /* Fills the area between two ellipses (or the outer one if the inner
+   * radii are <= 0), sampling at the pixels' centers */
+  int y0 = toY(cy - ryo), y1 = toY(cy + ryo) + 1, y;
+  for (y = y0; y < y1; y++) {
+    double dy = y + 0.5 - (cy + graphics_transform.y), t, xo, xi;
+    t = 1 - (dy * dy) / (ryo * ryo);
+    if (t < 0) continue;
+    xo = rxo * sqrt(t);
+    xi = -1;
+    if (rxi > 0 && ryi > 0) {
+      t = 1 - (dy * dy) / (ryi * ryi);
+      if (t > 0) xi = rxi * sqrt(t);
+    }
+    if (xi < 0) {
+      hline(clip, toX(cx - xo + 0.5), toX(cx + xo + 0.5), y);
+    } else {
+      hline(clip, toX(cx - xo + 0.5), toX(cx - xi + 0.5), y);
+      hline(clip, toX(cx + xi + 0.5), toX(cx + xo + 0.5), y);
+    }
+  }
+}
+
+
+static void fillDisc(const image_rect_t *clip, double x, double y, double r) {
+  fillRing(clip, x, y, r, r, 0, 0);
 }
 
 
@@ -598,6 +788,12 @@ int l_graphics_ellipse(lua_State *L) {
   long long dx = 0, dy = 2 * a2 * y;
   long long d;
 
+  if (!fill && graphics_lineWidth > 1) {
+    double w = graphics_lineWidth / 2;
+    fillRing(&clip, luaL_checknumber(L, 2), luaL_checknumber(L, 3),
+             rx + w, ry + w, rx - w, ry - w);
+    return 0;
+  }
   if (rx == 0 || ry == 0) {
     int i;
     for (i = -ry; i <= ry; i++) hline(&clip, cx - rx, cx + rx + 1, cy + i);
@@ -772,6 +968,40 @@ int l_graphics_printf(lua_State *L) {
 }
 
 
+int l_graphics_setLineWidth(lua_State *L) {
+  double w = luaL_checknumber(L, 1);
+  if (!(w > 0)) luaL_argerror(L, 1, "line width must be larger than 0");
+  graphics_lineWidth = w;
+  return 0;
+}
+
+
+int l_graphics_getLineWidth(lua_State *L) {
+  lua_pushnumber(L, graphics_lineWidth);
+  return 1;
+}
+
+
+int l_graphics_setPointSize(lua_State *L) {
+  double s = luaL_checknumber(L, 1);
+  if (!(s > 0)) luaL_argerror(L, 1, "point size must be larger than 0");
+  graphics_pointSize = s;
+  return 0;
+}
+
+
+int l_graphics_getPointSize(lua_State *L) {
+  lua_pushnumber(L, graphics_pointSize);
+  return 1;
+}
+
+
+int l_graphics_getStackDepth(lua_State *L) {
+  lua_pushinteger(L, graphics_transformStackSize);
+  return 1;
+}
+
+
 int l_graphics_push(lua_State *L) {
   static const char *types[] = { "transform", NULL };
   luaL_checkoption(L, 1, "transform", types);
@@ -827,6 +1057,32 @@ int l_graphics_setScissor(lua_State *L) {
   graphics_scissorRect[2] = w;
   graphics_scissorRect[3] = h;
   image_setClip(x, y, x + w, y + h);
+  return 0;
+}
+
+
+int l_graphics_intersectScissor(lua_State *L) {
+  /* Sets the scissor to the intersection of the current one and the given
+   * rectangle */
+  int x = luaL_checknumber(L, 1);
+  int y = luaL_checknumber(L, 2);
+  int x2 = x + (int) luaL_checknumber(L, 3);
+  int y2 = y + (int) luaL_checknumber(L, 4);
+  if (graphics_scissor) {
+    int *r = graphics_scissorRect;
+    if (r[0] > x) x = r[0];
+    if (r[1] > y) y = r[1];
+    if (r[0] + r[2] < x2) x2 = r[0] + r[2];
+    if (r[1] + r[3] < y2) y2 = r[1] + r[3];
+  }
+  if (x2 < x) x2 = x;
+  if (y2 < y) y2 = y;
+  graphics_scissor = 1;
+  graphics_scissorRect[0] = x;
+  graphics_scissorRect[1] = y;
+  graphics_scissorRect[2] = x2 - x;
+  graphics_scissorRect[3] = y2 - y;
+  image_setClip(x, y, x2, y2);
   return 0;
 }
 
@@ -901,6 +1157,17 @@ int luaopen_graphics(lua_State *L) {
     { "translate",          l_graphics_translate          },
     { "setScissor",         l_graphics_setScissor         },
     { "getScissor",         l_graphics_getScissor         },
+    { "_setCursor",         l_graphics_setCursor          },
+    { "setLineWidth",       l_graphics_setLineWidth       },
+    { "getLineWidth",       l_graphics_getLineWidth       },
+    { "setPointSize",       l_graphics_setPointSize       },
+    { "getPointSize",       l_graphics_getPointSize       },
+    { "getStackDepth",      l_graphics_getStackDepth      },
+    { "intersectScissor",   l_graphics_intersectScissor   },
+    { "_setVSync",          l_graphics_setVSync           },
+    { "_getVSync",          l_graphics_getVSync           },
+    { "_getScreen",         l_graphics_getScreen          },
+    { "_getTranslation",    l_graphics_getTranslation     },
     { "newImage",           l_image_new                   },
     { "newCanvas",          l_image_newCanvas             },
     { "newQuad",            l_quad_new                    },

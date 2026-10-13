@@ -225,6 +225,11 @@ void keyboard_setKeyRepeat(int allow) {
 }
 
 
+int keyboard_hasKeyRepeat(void) {
+  return keyboard_allowKeyRepeat;
+}
+
+
 int keyboard_isDown(const char *key) {
   int i;
   for (i = 0; scancodeMap[i]; i++) {

@@ -17,6 +17,8 @@ typedef struct {
   /* Integer copies of the glyphs' metrics, avoiding float maths per glyph */
   int advance[128], xoff[128], yoff[128];
   int height;
+  int ascent, descent;  /* In pixels; descent is negative */
+  double lineHeight;    /* Line spacing as a multiple of the height */
   int colored;        /* Image fonts keep their colors, others use the
                        * current color */
 } font_t;
@@ -37,6 +39,7 @@ typedef void (*font_spanCallback)(void *udata, const char *str, int len,
 void font_blit(font_t *self, pixel_t *buf, int bufw, int bufh,
                const char *str, int len, int dx, int dy);
 int font_getWidth(font_t *self, const char *str, int len);
+int font_getLineSpacing(font_t *self);
 int font_wrap(font_t *self, const char *str, int limit,
               font_wrapCallback callback, void *udata);
 void font_layout(font_t *self, const char *str, int len, int x, int y,

@@ -97,6 +97,10 @@ int main(int argc, char **argv) {
   #include "math_lua.h"
   #include "event_lua.h"
   #include "joystick_lua.h"
+  #include "input_lua.h"
+  #include "graphics_lua.h"
+  #include "system_lua.h"
+  #include "data_lua.h"
   #include "boot_lua.h"
   struct {
     const char *name, *data; int size;
@@ -106,6 +110,10 @@ int main(int argc, char **argv) {
     { "math.lua",       math_lua,       sizeof(math_lua)        },
     { "event.lua",      event_lua,      sizeof(event_lua)       },
     { "joystick.lua",   joystick_lua,   sizeof(joystick_lua)    },
+    { "input.lua",      input_lua,      sizeof(input_lua)       },
+    { "graphics.lua",   graphics_lua,   sizeof(graphics_lua)    },
+    { "system.lua",     system_lua,     sizeof(system_lua)      },
+    { "data.lua",       data_lua,       sizeof(data_lua)        },
     { "boot.lua",     boot_lua,     sizeof(boot_lua)    },
     { NULL, NULL, 0 }
   };

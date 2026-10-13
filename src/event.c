@@ -29,6 +29,7 @@ const char* event_typestr(int type) {
     case EVENT_MOUSE_MOVED        : return "mousemoved";
     case EVENT_MOUSE_PRESSED      : return "mousepressed";
     case EVENT_MOUSE_RELEASED     : return "mousereleased";
+    case EVENT_MOUSE_WHEELMOVED   : return "wheelmoved";
   }
   return "?";
 }

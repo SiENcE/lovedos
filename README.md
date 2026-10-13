@@ -67,7 +67,10 @@ Audio mixing, 4 sources (44kHz or pitched) | 85-94% CPU | 18-20% CPU
 `draw()` 16x16 image                    | 0.41ms   | 0.09ms
 `draw()` 16x16 image, scaled x2         | 2.9ms    | 0.61ms
 `draw()` 16x16 image, rotated           | 2.4ms    | 0.50ms
+`draw()` 100 16x16 images, one by one   | 55ms     | 12ms
+SpriteBatch of 100 16x16 sprites        | 27ms     | 5.7ms
 `print()` 43 characters                 | 4.1ms    | 0.87ms
+Text object, 43 characters              | 1.5ms    | 0.32ms
 `printf()` 176 characters, wrapped      | 17ms     | 3.6ms
 `Source:setPosition()`                  | 0.22ms   | 0.05ms
 
@@ -80,8 +83,12 @@ Some tips for keeping games fast on slow machines:
   while mixing, so positioned sources cost no more to play than others.
 * Rotated and scaled drawing maps every pixel individually and is 6-7 times
   slower than normal drawing; mirroring with a scale of `-1` is fast.
-* Text is expensive: static text can be drawn to a canvas once, drawing the
-  canvas each frame is cheaper than printing the text again.
+* Text is expensive: use `love.graphics.newText()` for text which doesn't
+  change every frame; drawing a Text object is 2.5 times faster than printing.
+* Draw tile maps and many sprites of the same image with a SpriteBatch, which
+  halves the time compared to separate `draw()` calls on a 386.
+* Use 22050Hz audio and `"stream"` sources for long music: files of 256KB or
+  more are streamed from disk instead of being loaded into memory.
 * Draw many pixels with a single `love.graphics.points()` call rather than
   many `love.graphics.point()` calls.
 * `love.graphics.setScissor()` makes clipped drawing cheaper, not more

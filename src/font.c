@@ -29,6 +29,9 @@ static const char *initFont(font_t *self, const void *data, int ptsize) {
   stbtt_GetFontVMetrics(&font, &ascent, &descent, &lineGap);
   float scale = stbtt_ScaleForMappingEmToPixels(&font, ptsize);
   self->height = (ascent - descent + lineGap) * scale + 0.5;
+  self->ascent = ascent * scale + 0.5;
+  self->descent = descent * scale - 0.5;
+  self->lineHeight = 1;
 
   /* Init image */
   int w = 128, h = 128;
@@ -155,6 +158,9 @@ const char *font_initImage(font_t *self, image_t *src, const char *glyphs,
     }
   }
   self->height = h;
+  self->ascent = h;
+  self->descent = 0;
+  self->lineHeight = 1;
   self->colored = 1;
   return NULL;
 }
@@ -186,7 +192,7 @@ void font_blit(font_t *self, pixel_t *buf, int bufw, int bufh,
   while (p < end) {
     if (*p == '\n') {
       x = dx;
-      y += self->height;
+      y += font_getLineSpacing(self);
     } else {
       int c = *p & 127;
       stbtt_bakedchar *g = &self->glyphs[c];
@@ -202,6 +208,11 @@ void font_blit(font_t *self, pixel_t *buf, int bufw, int bufh,
 
   image_blendMode = oldBlendMode;
   image_flip = oldFlip;
+}
+
+
+int font_getLineSpacing(font_t *self) {
+  return self->height * self->lineHeight + 0.5;
 }
 
 
@@ -304,7 +315,7 @@ static void layoutLine(void *udata, const char *str, int len, int width,
     }
     if (len > 0) p->callback(p->udata, str, len, x, p->y);
   }
-  p->y += p->font->height;
+  p->y += font_getLineSpacing(p->font);
 }
 
 
@@ -342,7 +353,7 @@ void font_getBounds(font_t *self, const char *str, int len, int x, int y,
   for (; p < end; p++) {
     if (*p == '\n') {
       cx = x;
-      cy += self->height;
+      cy += font_getLineSpacing(self);
     } else {
       int c = *p & 127;
       stbtt_bakedchar *g = &self->glyphs[c];

@@ -17,5 +17,7 @@ void vga_init(void);
 void vga_deinit(void);
 void vga_setPalette(int idx, int r, int g, int b);
 void vga_update(pixel_t *buffer);
+void vga_setVSync(int enable);
+int vga_getVSync(void);
 
 #endif

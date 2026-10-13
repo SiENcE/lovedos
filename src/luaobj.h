@@ -32,6 +32,9 @@ typedef struct {
 #define LUAOBJ_TYPE_RANDOMGENERATOR (1 << 7)
 #define LUAOBJ_TYPE_DECODER (1 << 8)
 
+/* Set in the header of objects freed early with Object:release() */
+#define LUAOBJ_RELEASED    (1u << 31)
+
 
 int luaobj_newclass(lua_State *L, const char *name, const char *extends,
                     int (*constructor)(lua_State*), luaL_Reg* reg);

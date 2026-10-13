@@ -16,6 +16,12 @@ int l_keyboard_setKeyRepeat(lua_State *L) {
 }
 
 
+int l_keyboard_hasKeyRepeat(lua_State *L) {
+  lua_pushboolean(L, keyboard_hasKeyRepeat());
+  return 1;
+}
+
+
 int l_keyboard_isDown(lua_State *L) {
   int n = lua_gettop(L);
   int res = 0;
@@ -32,6 +38,7 @@ int l_keyboard_isDown(lua_State *L) {
 int luaopen_keyboard(lua_State *L) {
   luaL_Reg reg[] = {
     { "setKeyRepeat", l_keyboard_setKeyRepeat },
+    { "hasKeyRepeat", l_keyboard_hasKeyRepeat },
     { "isDown",       l_keyboard_isDown       },
     { 0, 0 },
   };

@@ -53,7 +53,7 @@ int l_decoder_new(lua_State *L) {
 const char *l_decoder_getFilename(lua_State *L, int idx) {
   /* Returns the filename of the Decoder at `idx`, or NULL if it isn't one */
   luaobj_head_t *udata = luaL_testudata(L, idx, CLASS_NAME);
-  if (!udata) return NULL;
+  if (!udata || (udata->type & LUAOBJ_RELEASED)) return NULL;
   return ((l_decoder_t*) (udata + 1))->filename;
 }
 

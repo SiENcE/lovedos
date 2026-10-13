@@ -11,6 +11,7 @@
 int keyboard_init(void);
 void keyboard_deinit(void);
 void keyboard_setKeyRepeat(int allow);
+int keyboard_hasKeyRepeat(void);
 int keyboard_isDown(const char *key);
 void keyboard_update(void);
 

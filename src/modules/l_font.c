@@ -84,6 +84,60 @@ static void pushWrapLine(void *udata, const char *str, int len, int width,
 }
 
 
+int l_font_getAscent(lua_State *L) {
+  font_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
+  lua_pushinteger(L, self->ascent);
+  return 1;
+}
+
+
+int l_font_getDescent(lua_State *L) {
+  font_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
+  lua_pushinteger(L, self->descent);
+  return 1;
+}
+
+
+int l_font_getLineHeight(lua_State *L) {
+  font_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
+  lua_pushnumber(L, self->lineHeight);
+  return 1;
+}
+
+
+int l_font_setLineHeight(lua_State *L) {
+  font_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
+  self->lineHeight = luaL_checknumber(L, 2);
+  return 0;
+}
+
+
+int l_font_hasGlyphs(lua_State *L) {
+  /* hasGlyphs(text, ...) or hasGlyphs(codepoint, ...) */
+  font_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
+  int i, n = lua_gettop(L);
+  for (i = 2; i <= n; i++) {
+    if (lua_type(L, i) == LUA_TNUMBER) {
+      int c = lua_tointeger(L, i);
+      if (c < 0 || c > 127 || (self->colored && !self->advance[c])) {
+        lua_pushboolean(L, 0);
+        return 1;
+      }
+    } else {
+      const unsigned char *p = (const unsigned char*) luaL_checkstring(L, i);
+      for (; *p; p++) {
+        if (*p > 127 || (self->colored && !self->advance[*p])) {
+          lua_pushboolean(L, 0);
+          return 1;
+        }
+      }
+    }
+  }
+  lua_pushboolean(L, 1);
+  return 1;
+}
+
+
 int l_font_getWrap(lua_State *L) {
   font_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
   const char *str = luaL_checkstring(L, 2);
@@ -112,6 +166,12 @@ int luaopen_font(lua_State *L) {
     { "getWidth",       l_font_getWidth       },
     { "getHeight",      l_font_getHeight      },
     { "getWrap",        l_font_getWrap        },
+    { "getAscent",      l_font_getAscent      },
+    { "getDescent",     l_font_getDescent     },
+    { "getBaseline",    l_font_getAscent      },
+    { "getLineHeight",  l_font_getLineHeight  },
+    { "setLineHeight",  l_font_setLineHeight  },
+    { "hasGlyphs",      l_font_hasGlyphs      },
     { 0, 0 },
   };
   luaobj_newclass(L, CLASS_NAME, NULL, l_font_new, reg);
