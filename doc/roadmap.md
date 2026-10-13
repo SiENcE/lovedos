@@ -45,11 +45,10 @@ Status: `[ ]` todo, `[x]` done.
 - [x] **love.joystick** for the PC gameport: `getJoysticks`,
       `getJoystickCount`, `Joystick` objects and the `joystickpressed`,
       `joystickreleased` and `joystickaxis` callbacks
-- [ ] **Tracker music**: `love.audio.newSource("song.mod")` for MOD files
-      (and S3M/XM if a suitable small integer-only player is available).
-      *On hold:* the candidate players (micromod / IBXM by Martin Cameron,
-      integer-only, MOD/S3M/XM) don't state their licence in their files;
-      it needs to be confirmed before they can be included
+- [x] **Tracker music**: `love.audio.newSource("song.mod")` for MOD, S3M
+      and XM files, played with IBXM by Martin Cameron (BSD 3-clause
+      licence, `src/lib/ibxm`); `love.sound.newDecoder()` and
+      `love.sound.newSoundData()` accept modules too
 - [x] **love.filesystem (LÖVE 11)**: `getInfo`, `getDirectoryItems`,
       `lines`, `load`, `append`, `remove`, `createDirectory`,
       `getIdentity/setIdentity`, `getSaveDirectory`, `getWorkingDirectory`,

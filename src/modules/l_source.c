@@ -35,6 +35,10 @@ static const char *newSourceTypes[] = { "static", "stream", NULL };
 #define STREAM_MIN_SIZE   (256 * 1024)
 #define STREAM_CHUNK_SIZE 16384
 #define STREAM_BUFFERS    4
+/* Modules are rendered in small chunks so that the work is spread evenly
+ * over the frames rather than being done all at once every few frames */
+#define MODULE_CHUNK_FRAMES 1024
+#define MODULE_BUFFERS      12
 #define QUEUE_SLOTS       16
 #define QUEUE_DEFAULT     8
 
@@ -189,7 +193,11 @@ static void refill(source_t *self) {
   /* Decodes chunks of a streamed source into its free buffers. Like other
    * mixer streams it loops, the mixer decides when the source ends */
   queue_t *q = self->queue;
-  while (q->decoder && queue_used(q) < q->size) {
+  /* At most the buffers which are free now are filled: when decoding is
+   * slower than playing (eg. a module on a slow machine) the mixer would
+   * free buffers as fast as they're filled and this would never return */
+  int n = q->size - queue_used(q);
+  while (q->decoder && n-- > 0) {
     sounddata_t *data;
     if (decoder_decode(q->decoder, &data) || !data) {
       decoder_seek(q->decoder, 0);
@@ -281,6 +289,10 @@ static void openStream(lua_State *L, source_t *self, const char *filename) {
   if (err) luaL_error(L, "%s", err);
   q = dmt_calloc(1, sizeof(*q));
   q->size = STREAM_BUFFERS;
+  if (dec->type == DECODER_MODULE) {
+    dec->bufferFrames = MODULE_CHUNK_FRAMES;
+    q->size = MODULE_BUFFERS;
+  }
   q->decoder = dec;
   q->bitdepth = dec->bitdepth;
   self->queue = q;
@@ -315,8 +327,14 @@ int l_source_new(lua_State *L) {
     openStream(L, self, decoderFile);
   } else {
     self->type = type;
-    if (type == SOURCE_STREAM && filesystem_getInfo(filename, &info) >= 0 &&
-        info.size >= STREAM_MIN_SIZE) {
+    if (decoder_isModule(filename)) {
+      /* Modules are always rendered while playing: rendered in advance a
+       * song would need 5MB of memory per minute */
+      self->type = SOURCE_STREAM;
+      openStream(L, self, filename);
+    } else if (type == SOURCE_STREAM &&
+               filesystem_getInfo(filename, &info) >= 0 &&
+               info.size >= STREAM_MIN_SIZE) {
       openStream(L, self, filename);
     } else {
       err = sounddata_newFromFile(&self->data, filename);

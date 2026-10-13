@@ -528,6 +528,16 @@ Streamed sources are refilled once per frame (by `love.event.pump()`) and
 hold about 1.5 seconds of audio (at 22050Hz, 16 bit, mono), so frames
 shouldn't take longer than that while they play.
 
+`filename` can also be a tracker module: ProTracker `.mod` (4 channels, or
+up to 32 with `xCHN`/`xxCH` signatures), Scream Tracker 3 `.s3m` and
+FastTracker 2 `.xm` files are played with
+[IBXM](https://github.com/martincameron/micromod). Files are recognised by
+their contents, not their extension. Modules are always `"stream"` sources:
+the music is rendered as 16 bit stereo at 22050Hz while it plays, a little
+every frame, and about half a second is buffered. A module's duration is the
+length of one playthrough of its song. Rendering takes time on slow machines;
+see [README.md](../README.md#performance).
+
 ##### love.audio.newQueueableSource(samplerate, bitdepth, channels [, buffercount])
 Creates a source which plays the [SoundData](#sounddata) queued with
 `Source:queue()`, for example generated audio. It has up to `buffercount`
@@ -612,12 +622,15 @@ Returns the doppler scale.
 Provides functions for creating and loading raw audio data.
 
 ##### love.sound.newSoundData(filename)
+##### love.sound.newSoundData(decoder)
 Loads the `.wav` file `filename` and returns its audio data as a new
-`SoundData`.
+`SoundData`. A tracker module (see `love.audio.newSource()`) or a
+[Decoder](#decoder) is decoded completely; a module takes about 5MB per
+minute as `SoundData`, but then costs no more to play than other sounds.
 
 ##### love.sound.newDecoder(filename [, buffersize])
-Returns a new [Decoder](#decoder) which reads a `.wav` file in chunks of
-`buffersize` bytes (16384 by default).
+Returns a new [Decoder](#decoder) which reads a `.wav` file or renders a
+tracker module in chunks of `buffersize` bytes (16384 by default).
 
 ##### love.sound.newSoundData(samples [, rate, bits, channels])
 Creates and returns a new silent `SoundData` which is `samples` samples long
@@ -1261,6 +1274,7 @@ Returns the inner angle, outer angle and outer volume of the source's cone.
 
 ### Decoder
 Reads audio from a file in chunks, created with `love.sound.newDecoder()`.
+Decoders of tracker modules return 16 bit stereo audio at 22050Hz.
 
 ##### Decoder:decode()
 Returns the next chunk as a new [SoundData](#sounddata), or `nil` at the end

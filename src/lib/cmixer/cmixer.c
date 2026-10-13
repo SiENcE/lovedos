@@ -252,7 +252,11 @@ void cm_process(cm_Int16 *dst, int len) {
   lock();
   s = &cmixer.sources;
   while (*s) {
-    process_source(*s, len);
+    /* Sources paused or stopped since the last call are only removed: if
+    ** they were processed they would play (and advance) one more block */
+    if ((*s)->state == CM_STATE_PLAYING) {
+      process_source(*s, len);
+    }
     /* Remove source from list if it is no longer playing */
     if ((*s)->state != CM_STATE_PLAYING) {
       (*s)->active = 0;

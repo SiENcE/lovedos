@@ -62,6 +62,8 @@ Operation                               | 386DX-30 | 486DX2-66
 Audio mixing, 1 source (22kHz)          | 17% CPU  | 3.6% CPU
 Audio mixing, 4 sources (22kHz)         | 41% CPU  | 8.7% CPU
 Audio mixing, 4 sources (44kHz or pitched) | 85-94% CPU | 18-20% CPU
+Tracker music, 4 channel MOD (render + mix) | 60% CPU | 14% CPU
+Tracker music, 8 channel MOD (render + mix) | 95% CPU | 22% CPU
 `love.graphics.clear()`                 | 3.0ms    | 0.63ms
 `love.graphics.present()`               | 3.0ms    | 0.63ms
 `draw()` 16x16 image                    | 0.41ms   | 0.09ms
@@ -89,6 +91,11 @@ Some tips for keeping games fast on slow machines:
   halves the time compared to separate `draw()` calls on a 386.
 * Use 22050Hz audio and `"stream"` sources for long music: files of 256KB or
   more are streamed from disk instead of being loaded into memory.
+* Tracker music (`.mod`, `.s3m`, `.xm`) is small but rendered while it plays,
+  which costs CPU time for every channel of the module: on a 486 it is
+  cheap, on a 386 keep to 4 channel MODs and simple scenes. A short module
+  can instead be rendered in advance with `love.sound.newSoundData()`
+  (about 5MB per minute), which makes it as cheap to play as a sound.
 * Draw many pixels with a single `love.graphics.points()` call rather than
   many `love.graphics.point()` calls.
 * `love.graphics.setScissor()` makes clipped drawing cheaper, not more
@@ -106,3 +113,7 @@ the terms of the MIT license. See [LICENSE](LICENSE) for details.
 
 LoveDOS includes Lua (MIT license). The full license for Lua can be found at
 the bottom of the [src/lib/lua/lua.h](src/lib/lua/lua.h) file.
+
+LoveDOS includes IBXM by Martin Cameron (BSD 3-clause license) to play
+tracker music. Its license can be found in the
+[src/lib/ibxm/LICENSE](src/lib/ibxm/LICENSE) file.

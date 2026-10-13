@@ -5,7 +5,9 @@
  * under the terms of the MIT license. See LICENSE for details.
  */
 
+#include <string.h>
 #include "sounddata.h"
+#include "decoder.h"
 #include "luaobj.h"
 
 
@@ -26,13 +28,54 @@ static l_sounddata_t *newSoundData(lua_State *L) {
 }
 
 
+static const char *decodeAll(sounddata_t **out, const char *filename) {
+  /* Decodes a whole file (such as a tracker module) with a decoder */
+  decoder_t *dec;
+  sounddata_t *chunk;
+  char *dst;
+  const char *err = decoder_open(&dec, filename, 65536);
+  *out = NULL;
+  if (err) return err;
+  err = sounddata_new(out, dec->length, dec->samplerate, dec->bitdepth,
+                      dec->channels);
+  dst = err ? NULL : (*out)->data;
+  while (!err) {
+    int size;
+    err = decoder_decode(dec, &chunk);
+    if (err || !chunk) break;
+    size = sounddata_getSize(chunk);
+    memcpy(dst, chunk->data, size);
+    dst += size;
+    sounddata_release(chunk);
+  }
+  decoder_close(dec);
+  if (err && *out) {
+    sounddata_release(*out);
+    *out = NULL;
+  }
+  return err;
+}
+
+
+const char *l_decoder_getFilename(lua_State *L, int idx);
+
 int l_sounddata_new(lua_State *L) {
+  /* newSoundData(filename), newSoundData(decoder) or
+   * newSoundData(samples [, rate, bits, channels]) */
   const char *err;
+  const char *decoderFile = l_decoder_getFilename(L, 1);
   l_sounddata_t *self;
-  if (lua_type(L, 1) == LUA_TSTRING) {
+  if (decoderFile) {
+    self = newSoundData(L);
+    err = decodeAll(&self->data, decoderFile);
+  } else if (lua_type(L, 1) == LUA_TSTRING) {
     const char *filename = lua_tostring(L, 1);
     self = newSoundData(L);
-    err = sounddata_newFromFile(&self->data, filename);
+    if (decoder_isModule(filename)) {
+      err = decodeAll(&self->data, filename);
+    } else {
+      err = sounddata_newFromFile(&self->data, filename);
+    }
   } else {
     int samples = luaL_checkinteger(L, 1);
     int rate = luaL_optinteger(L, 2, 44100);

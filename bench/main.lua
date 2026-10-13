@@ -34,15 +34,48 @@ local function bench(name, f)
 end
 
 
-local function loopRate()
+local function loopRate(perFrame)
   -- Iterations of a busy loop per second; less time left for the main program
-  -- (eg. due to the audio interrupt) means fewer iterations
-  local n, t0 = 0, getTime()
-  while getTime() - t0 < 1 do
+  -- (eg. due to the audio interrupt) means fewer iterations. `perFrame` is
+  -- called 30 times per second, like a game updating at 30fps would
+  local n, t0, frame = 0, getTime(), 0
+  while true do
+    local t = getTime() - t0
+    if t >= 1 then return n end
     for i = 1, 200 do end
     n = n + 1
+    if perFrame and t >= frame / 30 then
+      perFrame()
+      frame = frame + 1
+    end
   end
-  return n
+end
+
+
+local function writeModule(filename, channels)
+  -- A ProTracker module with all channels playing notes with vibrato
+  local u16 = function(n) return string.char(math.floor(n / 256), n % 256) end
+  local out = { string.rep("\0", 20) }
+  local wave = {}
+  for i = 0, 63 do
+    wave[#wave + 1] = string.char(math.floor(90 * math.sin(i / 32 * math.pi)) % 256)
+  end
+  out[2] = string.rep("\0", 22) .. u16(32) .. "\0\64" .. u16(0) .. u16(32)
+  out[3] = string.rep("\0", 30 * 30)
+  out[4] = "\1\127" .. string.rep("\0", 128)
+  out[5] = channels == 4 and "M.K." or (channels .. "CHN")
+  for row = 0, 63 do
+    for c = 1, channels do
+      local period = 200 + c * 37 + (row % 8) * 11
+      if row % 4 == 0 then
+        out[#out + 1] = string.char(math.floor(period / 256), period % 256, 0x14, 0x44)
+      else
+        out[#out + 1] = string.char(0, 0, 0x04, 0x44)
+      end
+    end
+  end
+  out[#out + 1] = table.concat(wave)
+  love.filesystem.write(filename, table.concat(out))
 end
 
 
@@ -86,6 +119,25 @@ local function audioBenchmarks()
   load("4 src 44kHz stereo", 4, stereo)
   load("4 src 22kHz positioned", 4, mono,
        function(s, i) s:setPosition(i * 3, 2, 0) end)
+
+  -- Tracker modules: rendering (done by the main program, once per frame)
+  -- and mixing the rendered audio
+  for _, channels in ipairs({ 4, 8 }) do
+    local name = "bench" .. channels .. ".mod"
+    writeModule(name, channels)
+    local d = love.sound.newDecoder(name, 4096)
+    local us = timeit(function()
+      if not d:decode() then d:seek(0) end
+    end) * 1e6
+    out("module " .. channels .. "ch render",
+        string.format("%8.1f %%", us / 1e6 / (1024 / 22050) * 100))
+    local src = a.newSource(name)
+    src:setLooping(true)
+    src:play()
+    out("module " .. channels .. "ch playing",
+        string.format("%8.1f %%", 100 * (1 - loopRate(a._update) / base)))
+    a.stop()
+  end
 
   local s = a.newSource(mono)
   bench("Source:setVolume", function() s:setVolume(0.5) end)
@@ -167,8 +219,8 @@ function love.load(args)
   audioBenchmarks()
   graphicsBenchmarks()
   love.filesystem.write("bench.txt", table.concat(results, "\r\n") .. "\r\n")
-  if args[1] == "--quit" then
-    love.event.quit()
+  for _, a in ipairs(args) do
+    if a == "--quit" then love.event.quit() end
   end
 end
 

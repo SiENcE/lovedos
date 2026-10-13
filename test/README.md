@@ -10,4 +10,5 @@ DPMI=/path/to/HDPMI32.EXE test/run.sh conf11     # a single test
 `EXE` selects the LoveDOS executable (default `bin/love.exe`), `DOSBOX` the
 DOSBox command and `TIMEOUT` the seconds after which a test is aborted; set
 `KEEP=1` to keep the temporary DOS directory for inspection. Tests use the
-helpers in `testlib.lua`.
+helpers in `testlib.lua`, and generate sounds with `wavgen.lua` and tracker
+modules with `modgen.lua`.

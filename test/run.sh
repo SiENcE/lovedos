@@ -31,7 +31,7 @@ for t in "${tests[@]}"; do
   cp "$EXE" "$TMP/c/LOVE.EXE"
   cp "$DPMI" "$TMP/c/$dpmiexe"
   cp -r "$t" "$TMP/c/GAME"
-  cp testlib.lua wavgen.lua "$TMP/c/GAME/"
+  cp testlib.lua wavgen.lua modgen.lua "$TMP/c/GAME/"
   cat > "$TMP/dosbox.conf" <<CONF
 [dosbox]
 machine=svga_s3
