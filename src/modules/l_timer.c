@@ -47,7 +47,7 @@ int l_timer_step(lua_State *L) {
 
 int l_timer_sleep(lua_State *L) {
   delay(luaL_checknumber(L, 1) * 1000.);
-  return 1;
+  return 0;
 }
 
 

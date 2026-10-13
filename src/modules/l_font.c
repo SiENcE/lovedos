@@ -43,13 +43,31 @@ int l_font_gc(lua_State *L) {
 
 int l_font_getWidth(lua_State *L) {
   font_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
-  const char *p = luaL_checkstring(L, 2);
-  int width = 0;
-  while (*p) {
-    width += self->glyphs[(int) (*p++ & 127)].xadvance;
-  }
-  lua_pushinteger(L, width);
+  size_t len;
+  const char *str = luaL_checklstring(L, 2, &len);
+  lua_pushinteger(L, font_getWidth(self, str, len));
   return 1;
+}
+
+
+static void pushWrapLine(void *udata, const char *str, int len, int width,
+                         int last) {
+  lua_State *L = udata;
+  lua_pushlstring(L, str, len);
+  lua_rawseti(L, -2, lua_rawlen(L, -2) + 1);
+}
+
+
+int l_font_getWrap(lua_State *L) {
+  font_t *self = luaobj_checkudata(L, 1, CLASS_TYPE);
+  const char *str = luaL_checkstring(L, 2);
+  int limit = luaL_checknumber(L, 3);
+  int width;
+  lua_newtable(L);
+  width = font_wrap(self, str, limit, pushWrapLine, L);
+  lua_pushinteger(L, width);
+  lua_insert(L, -2);
+  return 2;
 }
 
 
@@ -67,6 +85,7 @@ int luaopen_font(lua_State *L) {
     { "__gc",           l_font_gc             },
     { "getWidth",       l_font_getWidth       },
     { "getHeight",      l_font_getHeight      },
+    { "getWrap",        l_font_getWrap        },
     { 0, 0 },
   };
   luaobj_newclass(L, CLASS_NAME, NULL, l_font_new, reg);

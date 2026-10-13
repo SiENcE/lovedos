@@ -7,6 +7,8 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <limits.h>
+#include <math.h>
 #include <pc.h>
 #include "palette.h"
 #include "image.h"
@@ -25,6 +27,66 @@ int       graphics_backgroundColor_rgb[3];
 pixel_t   graphics_color;
 int       graphics_color_rgb[3];
 int       graphics_blendMode;
+
+/* Transform: only translation is supported, which keeps all drawing on the
+ * pixel grid and costs nothing per pixel */
+#define TRANSFORM_STACK_MAX 64
+typedef struct { double x, y; } transform_t;
+static transform_t graphics_transform;
+static transform_t graphics_transformStack[TRANSFORM_STACK_MAX];
+static int graphics_transformStackSize;
+
+/* Scissor rectangle, in screen coordinates */
+static int graphics_scissor;
+static int graphics_scissorRect[4];
+
+
+static inline int fastFloor(double x) {
+  /* Cheaper than floor(), which is a library call */
+  int i = x;
+  return i - (x < i);
+}
+
+
+static inline int toX(double x) {
+  return fastFloor(x + graphics_transform.x);
+}
+
+
+static inline int toY(double y) {
+  return fastFloor(y + graphics_transform.y);
+}
+
+
+static image_rect_t getClip(void) {
+  /* Returns the area of the current canvas which may be drawn to */
+  return image_getClip(graphics_canvas->width, graphics_canvas->height);
+}
+
+
+static inline void plot(const image_rect_t *clip, int x, int y) {
+  if (x >= clip->x0 && x < clip->x1 && y >= clip->y0 && y < clip->y1) {
+    graphics_canvas->data[x + y * graphics_canvas->width] = graphics_color;
+  }
+}
+
+
+static inline void hline(const image_rect_t *clip, int x0, int x1, int y) {
+  /* Fills the pixels from x0 to x1 (exclusive) of row y */
+  if (y < clip->y0 || y >= clip->y1) return;
+  if (x0 < clip->x0) x0 = clip->x0;
+  if (x1 > clip->x1) x1 = clip->x1;
+  if (x0 >= x1) return;
+  memset(graphics_canvas->data + x0 + y * graphics_canvas->width,
+         graphics_color, x1 - x0);
+}
+
+
+static int checkMode(lua_State *L, int idx) {
+  /* Returns 1 for "fill" and 0 for "line" */
+  static const char *modes[] = { "line", "fill", NULL };
+  return luaL_checkoption(L, idx, NULL, modes);
+}
 
 
 static int getColorFromArgs(lua_State *L, int *rgb, const int *def) {
@@ -119,9 +181,9 @@ int l_graphics_getBlendMode(lua_State *L) {
 
 int l_graphics_setBlendMode(lua_State *L) {
   const char *str = lua_isnoneornil(L, 1) ? "normal" : luaL_checkstring(L, 1);
-  #define SET_BLEND_MODE(str, e)\
+  #define SET_BLEND_MODE(name, e)\
     do {\
-      if (!strcmp(str, str)) {\
+      if (!strcmp(str, name)) {\
         graphics_blendMode = e;\
         image_setBlendMode(graphics_blendMode);\
         return 0;\
@@ -205,6 +267,9 @@ int l_graphics_setCanvas(lua_State *L) {
 }
 
 
+int l_graphics_setScissor(lua_State *L);
+int l_graphics_origin(lua_State *L);
+
 int l_graphics_reset(lua_State *L) {
   int (*funcs[])(lua_State*) = {
     l_graphics_setBackgroundColor,
@@ -212,6 +277,8 @@ int l_graphics_reset(lua_State *L) {
     l_graphics_setBlendMode,
     l_graphics_setFont,
     l_graphics_setCanvas,
+    l_graphics_setScissor,
+    l_graphics_origin,
     NULL,
   };
   int i;
@@ -225,8 +292,18 @@ int l_graphics_reset(lua_State *L) {
 
 int l_graphics_clear(lua_State *L) {
   int idx = getColorFromArgs(L, NULL, graphics_backgroundColor_rgb);
-  int sz = graphics_canvas->width * graphics_canvas->height;
-  memset(graphics_canvas->data, idx, sz);
+  image_rect_t clip = getClip();
+  int y;
+  if (!graphics_scissor) {
+    memset(graphics_canvas->data, idx,
+           graphics_canvas->width * graphics_canvas->height);
+    return 0;
+  }
+  /* Like in LÖVE, clearing is limited to the scissor rectangle */
+  for (y = clip.y0; y < clip.y1 && clip.x0 < clip.x1; y++) {
+    memset(graphics_canvas->data + clip.x0 + y * graphics_canvas->width,
+           idx, clip.x1 - clip.x0);
+  }
   return 0;
 }
 
@@ -238,202 +315,424 @@ int l_graphics_present(lua_State *L) {
 
 
 int l_graphics_draw(lua_State *L) {
+  /* draw(image, [quad,] x, y, r, sx, sy, ox, oy) or, as in older versions of
+   * LoveDOS, draw(image, [quad,] x, y, flip) */
   image_t *img = luaobj_checkudata(L, 1, LUAOBJ_TYPE_IMAGE);
   quad_t *quad = NULL;
-  int x, y, flip;
-  if (!lua_isnone(L, 2) && lua_type(L, 2) != LUA_TNUMBER) {
-    quad = luaobj_checkudata(L, 2, LUAOBJ_TYPE_QUAD);
-    x = luaL_optnumber(L, 3, 0);
-    y = luaL_optnumber(L, 4, 0);
-    flip = !lua_isnone(L, 5) && lua_toboolean(L, 5);
-  } else {
-    x = luaL_optnumber(L, 2, 0);
-    y = luaL_optnumber(L, 3, 0);
-    flip = !lua_isnone(L, 4) && lua_toboolean(L, 4);
-  }
+  int i = 2;
+  int srcx, srcy, srcw, srch;
+  double x, y, r = 0, sx = 1, sy = 1, ox = 0, oy = 0;
   pixel_t *buf = graphics_canvas->data;
   int bufw = graphics_canvas->width;
   int bufh = graphics_canvas->height;
-  image_setFlip(flip);
+
+  if (!lua_isnone(L, 2) && lua_type(L, 2) != LUA_TNUMBER) {
+    quad = luaobj_checkudata(L, 2, LUAOBJ_TYPE_QUAD);
+    i = 3;
+  }
   if (quad) {
-    image_blit(img, buf, bufw, bufh, x, y,
-               quad->x, quad->y, quad->width, quad->height);
+    srcx = quad->x;
+    srcy = quad->y;
+    srcw = quad->width;
+    srch = quad->height;
   } else {
-    image_blit(img, buf, bufw, bufh, x, y,
-               0, 0, img->width, img->height);
+    srcx = srcy = 0;
+    srcw = img->width;
+    srch = img->height;
+  }
+  x = luaL_optnumber(L, i, 0) + graphics_transform.x;
+  y = luaL_optnumber(L, i + 1, 0) + graphics_transform.y;
+
+  if (lua_gettop(L) <= i + 1 || lua_type(L, i + 2) == LUA_TBOOLEAN) {
+    /* No transformation, or the legacy horizontal flip argument */
+    image_setFlip(lua_toboolean(L, i + 2));
+    image_blit(img, buf, bufw, bufh, fastFloor(x), fastFloor(y),
+               srcx, srcy, srcw, srch);
+    return 0;
+  }
+  r  = luaL_optnumber(L, i + 2, 0);
+  sx = luaL_optnumber(L, i + 3, 1);
+  sy = luaL_optnumber(L, i + 4, sx);
+  ox = luaL_optnumber(L, i + 5, 0);
+  oy = luaL_optnumber(L, i + 6, 0);
+
+  if (r == 0 && sy == 1 && (sx == 1 || sx == -1)) {
+    /* Fast path: an unscaled image, optionally mirrored horizontally */
+    image_setFlip(sx < 0);
+    image_blit(img, buf, bufw, bufh,
+               fastFloor(sx < 0 ? x + ox - srcw : x - ox), fastFloor(y - oy),
+               srcx, srcy, srcw, srch);
+  } else {
+    image_drawTransformed(img, buf, bufw, bufh, srcx, srcy, srcw, srch,
+                          x, y, r, sx, sy, ox, oy);
   }
   return 0;
+}
+
+
+static int getNumbers(lua_State *L, int idx, double **out) {
+  /* Reads all the numbers from argument `idx` onwards -- or from the table at
+   * `idx`, whose elements may also be {x, y} tables -- into a scratch buffer
+   * and returns how many there are. Numbers are read in pairs */
+  static double *buf;
+  static int cap;
+  int i, n = 0;
+  int argc = lua_gettop(L);
+  int istable = lua_istable(L, idx);
+  int count = istable ? (int) lua_rawlen(L, idx) : argc - idx + 1;
+
+  #define PUSH_NUMBER(v)\
+    do {\
+      if (n == cap) {\
+        cap = cap ? cap * 2 : 64;\
+        buf = realloc(buf, cap * sizeof(*buf));\
+      }\
+      buf[n++] = (v);\
+    } while (0)
+
+  for (i = 0; i < count; i++) {
+    if (!istable) {
+      PUSH_NUMBER(luaL_checknumber(L, idx + i));
+      continue;
+    }
+    lua_rawgeti(L, idx, i + 1);
+    if (lua_istable(L, -1)) {
+      lua_rawgeti(L, -1, 1);
+      lua_rawgeti(L, -2, 2);
+      PUSH_NUMBER(luaL_checknumber(L, -2));
+      PUSH_NUMBER(luaL_checknumber(L, -1));
+      lua_pop(L, 2);
+    } else {
+      if (!lua_isnumber(L, -1)) {
+        luaL_error(L, "expected numbers or {x, y} tables");
+      }
+      PUSH_NUMBER(lua_tonumber(L, -1));
+    }
+    lua_pop(L, 1);
+  }
+  #undef PUSH_NUMBER
+
+  if (n & 1) {
+    luaL_error(L, "number of vertex components must be a multiple of two");
+  }
+  *out = buf;
+  return n;
 }
 
 
 int l_graphics_point(lua_State *L) {
-  int x = luaL_checknumber(L, 1);
-  int y = luaL_checknumber(L, 2);
-  image_setPixel(graphics_canvas, x, y, graphics_color);
+  image_rect_t clip = getClip();
+  int x = toX(luaL_checknumber(L, 1));
+  int y = toY(luaL_checknumber(L, 2));
+  plot(&clip, x, y);
   return 0;
 }
 
 
-int l_graphics_line(lua_State *L) {
-  int argc = lua_gettop(L);
-  int lastx = luaL_checknumber(L, 1);
-  int lasty = luaL_checknumber(L, 2);
-  int idx = 3;
-  while (idx < argc) {
-    int x0 = lastx;
-    int y0 = lasty;
-    int x1 = luaL_checknumber(L, idx);
-    int y1 = luaL_checknumber(L, idx + 1);
-    lastx = x1;
-    lasty = y1;
-    /* Draw line */
-    #define SWAP_INT(a, b) (((a) ^= (b)), ((b) ^= (a)), ((a) ^= (b)))
-    int steep = abs(y1 - y0) > abs(x1 - x0);
-    if (steep) {
-      SWAP_INT(x0, y0);
-      SWAP_INT(x1, y1);
-    }
-    if (x0 > x1) {
-      SWAP_INT(x0, x1);
-      SWAP_INT(y0, y1);
-    }
-    #undef SWAP_INT
-    int deltax = x1 - x0;
-    int deltay = abs(y1 - y0);
-    int error = deltax / 2;
-    int ystep = (y0 < y1) ? 1 : -1;
-    int x, y = y0;
-    for (x = x0; x < x1; x++) {
-      if (steep) {
-        image_setPixel(graphics_canvas, y, x, graphics_color);
-      } else {
-        image_setPixel(graphics_canvas, x, y, graphics_color);
-      }
-      error -= deltay;
-      if (error < 0) {
-        y += ystep;
-        error += deltax;
-      }
-    }
-    idx += 2;
+int l_graphics_points(lua_State *L) {
+  /* points(x, y, ...), points({x, y, ...}) or points({{x, y}, ...}) */
+  image_rect_t clip = getClip();
+  double *v;
+  int i, n = getNumbers(L, 1, &v);
+  for (i = 0; i < n; i += 2) {
+    plot(&clip, toX(v[i]), toY(v[i + 1]));
   }
+  return 0;
+}
+
+
+static void drawLine(const image_rect_t *clip, int x0, int y0, int x1, int y1) {
+  #define SWAP_INT(a, b) do { int t = (a); (a) = (b); (b) = t; } while (0)
+  int steep = abs(y1 - y0) > abs(x1 - x0);
+  if (steep) {
+    SWAP_INT(x0, y0);
+    SWAP_INT(x1, y1);
+  }
+  if (x0 > x1) {
+    SWAP_INT(x0, x1);
+    SWAP_INT(y0, y1);
+  }
+  #undef SWAP_INT
+  int deltax = x1 - x0;
+  int deltay = abs(y1 - y0);
+  int error = deltax / 2;
+  int ystep = (y0 < y1) ? 1 : -1;
+  int x, y = y0;
+  for (x = x0; x < x1; x++) {
+    if (steep) {
+      plot(clip, y, x);
+    } else {
+      plot(clip, x, y);
+    }
+    error -= deltay;
+    if (error < 0) {
+      y += ystep;
+      error += deltax;
+    }
+  }
+}
+
+
+static void drawPolyline(const image_rect_t *clip, const double *v, int n,
+                         int closed) {
+  int i;
+  for (i = 0; i + 3 < n; i += 2) {
+    drawLine(clip, toX(v[i]), toY(v[i + 1]), toX(v[i + 2]), toY(v[i + 3]));
+  }
+  if (closed && n >= 4) {
+    drawLine(clip, toX(v[n - 2]), toY(v[n - 1]), toX(v[0]), toY(v[1]));
+  }
+}
+
+
+int l_graphics_line(lua_State *L) {
+  /* line(x1, y1, x2, y2, ...) or line({x1, y1, x2, y2, ...}) */
+  image_rect_t clip = getClip();
+  double *v;
+  int n = getNumbers(L, 1, &v);
+  if (n < 4) {
+    luaL_error(L, "need at least two vertices to draw a line");
+  }
+  drawPolyline(&clip, v, n, 0);
   return 0;
 }
 
 
 int l_graphics_rectangle(lua_State *L) {
-  const char *mode = luaL_checkstring(L, 1);
-  int x = luaL_checknumber(L, 2);
-  int y = luaL_checknumber(L, 3);
-  int x2 = luaL_checknumber(L, 4) + x;
-  int y2 = luaL_checknumber(L, 5) + y;
-  int fill = 0;
-  if (!strcmp(mode, "fill")) {
-    fill = 1;
-  } else if (!strcmp(mode, "line")) {
-    fill = 0;
-  } else {
-    luaL_error(L, "bad mode");
-  }
-  /* Clip to screen */
-  if (x < 0) { x2 += x; x = 0; }
-  if (y < 0) { y2 += y; y = 0; }
-  if (x2 > graphics_canvas->width)  { x2 = graphics_canvas->width; }
-  if (y2 > graphics_canvas->height) { y2 = graphics_canvas->height; }
-  /* Get width/height and Abort early if we're off screen */
-  int width = x2 - x;
-  int height = y2 - y;
-  if (width <= 0 || height <= 0) return 0;
-  /* Draw */
+  int fill = checkMode(L, 1);
+  double fx = luaL_checknumber(L, 2);
+  double fy = luaL_checknumber(L, 3);
+  int x = toX(fx);
+  int y = toY(fy);
+  int x2 = toX(fx + luaL_checknumber(L, 4));
+  int y2 = toY(fy + luaL_checknumber(L, 5));
+  image_rect_t clip = getClip();
+  int i;
+  if (x2 < x) { int t = x; x = x2; x2 = t; }
+  if (y2 < y) { int t = y; y = y2; y2 = t; }
+  if (x == x2 || y == y2) return 0;
   if (fill) {
-    int i;
-    for (i = y; i < y2; i++) {
-      memset(graphics_canvas->data + x + i * graphics_canvas->width,
-             graphics_color, width);
+    /* Clip once, then fill the rows */
+    pixel_t *p;
+    if (x < clip.x0) x = clip.x0;
+    if (y < clip.y0) y = clip.y0;
+    if (x2 > clip.x1) x2 = clip.x1;
+    if (y2 > clip.y1) y2 = clip.y1;
+    if (x >= x2) return 0;
+    p = graphics_canvas->data + x + y * graphics_canvas->width;
+    for (i = y; i < y2; i++, p += graphics_canvas->width) {
+      memset(p, graphics_color, x2 - x);
     }
   } else {
-      memset(graphics_canvas->data + x + y * graphics_canvas->width,
-             graphics_color, width);
-      memset(graphics_canvas->data + x + (y2 - 1) * graphics_canvas->width,
-             graphics_color, width);
-      int i;
-      for (i = y; i < y2; i++) {
-        graphics_canvas->data[x + i * graphics_canvas->width] =
-          graphics_canvas->data[x2 - 1 + i * graphics_canvas->width] =
-            graphics_color;
-      }
+    hline(&clip, x, x2, y);
+    hline(&clip, x, x2, y2 - 1);
+    for (i = y + 1; i < y2 - 1; i++) {
+      plot(&clip, x, i);
+      plot(&clip, x2 - 1, i);
+    }
   }
   return 0;
 }
 
 
 int l_graphics_circle(lua_State *L) {
-  const char *mode = luaL_checkstring(L, 1);
-  int x = luaL_checknumber(L, 2);
-  int y = luaL_checknumber(L, 3);
+  int fill = checkMode(L, 1);
+  int x = toX(luaL_checknumber(L, 2));
+  int y = toY(luaL_checknumber(L, 3));
   int radius = luaL_checknumber(L, 4);
-  int fill = 0;
-  if (!strcmp(mode, "fill")) {
-    fill = 1;
-  } else if (!strcmp(mode, "line")) {
-    fill = 0;
-  } else {
-    luaL_error(L, "bad mode");
+  image_rect_t clip = getClip();
+  int dx = radius, dy = 0;
+  int radiusError = 1 - dx;
+  while (dx >= dy) {
+    if (fill) {
+      hline(&clip, x - dx, x + dx, y + dy);
+      hline(&clip, x - dx, x + dx, y - dy);
+      hline(&clip, x - dy, x + dy, y + dx);
+      hline(&clip, x - dy, x + dy, y - dx);
+    } else {
+      plot(&clip,  dx + x,   dy + y);
+      plot(&clip, -dx + x,   dy + y);
+      plot(&clip,  dx + x,  -dy + y);
+      plot(&clip, -dx + x,  -dy + y);
+      plot(&clip,  dy + x,   dx + y);
+      plot(&clip, -dy + x,   dx + y);
+      plot(&clip,  dy + x,  -dx + y);
+      plot(&clip, -dy + x,  -dx + y);
+    }
+    dy++;
+    if (radiusError < 0) {
+      radiusError += 2 * dy + 1;
+    } else {
+      dx--;
+      radiusError += 2 * (dy - dx + 1);
+    }
   }
-  /* Draw */
+  return 0;
+}
+
+
+static void ellipsePoints(const image_rect_t *clip, int cx, int cy,
+                          int x, int y, int fill) {
   if (fill) {
-    int dx = radius, dy = 0;
-    int radiusError = 1-dx;
-    while(dx >= dy) {
-      #define FILL_ROW(startx, endx, starty)\
-        do {\
-          int sx = (startx);\
-          int ex = (endx);\
-          int sy = (starty);\
-          if (sy < 0 || sy >= graphics_canvas->height) break;\
-          if (sx < 0) sx = 0;\
-          if (sx > graphics_canvas->width) sx = graphics_canvas->width;\
-          if (ex < 0) ex = 0;\
-          if (ex > graphics_canvas->width) ex = graphics_canvas->width;\
-          if (sx == ex) break;\
-          memset(graphics_canvas->data + sx + sy * graphics_canvas->width,\
-                 graphics_color, ex - sx);\
-        } while (0)
-
-      FILL_ROW( -dx + x,  dx + x,   dy + y );
-      FILL_ROW( -dx + x,  dx + x,  -dy + y );
-      FILL_ROW( -dy + x,  dy + x,   dx + y );
-      FILL_ROW( -dy + x,  dy + x,  -dx + y );
-
-      #undef FILL_ROW
-      dy++;
-      if(radiusError<0) {
-        radiusError+=2*dy+1;
-      } else {
-        dx--;
-        radiusError+=2*(dy-dx+1);
-      }
-    }
+    hline(clip, cx - x, cx + x + 1, cy + y);
+    if (y != 0) hline(clip, cx - x, cx + x + 1, cy - y);
   } else {
-    int dx = radius, dy = 0;
-    int radiusError = 1-dx;
-    while(dx >= dy) {
-      image_setPixel(graphics_canvas,  dx + x,   dy + y, graphics_color);
-      image_setPixel(graphics_canvas, -dx + x,   dy + y, graphics_color);
-      image_setPixel(graphics_canvas,  dx + x,  -dy + y, graphics_color);
-      image_setPixel(graphics_canvas, -dx + x,  -dy + y, graphics_color);
-      image_setPixel(graphics_canvas,  dy + x,   dx + y, graphics_color);
-      image_setPixel(graphics_canvas, -dy + x,   dx + y, graphics_color);
-      image_setPixel(graphics_canvas,  dy + x,  -dx + y, graphics_color);
-      image_setPixel(graphics_canvas, -dy + x,  -dx + y, graphics_color);
-      dy++;
-      if(radiusError<0) {
-        radiusError+=2*dy+1;
-      } else {
-        dx--;
-        radiusError+=2*(dy-dx+1);
+    plot(clip, cx + x, cy + y);
+    plot(clip, cx - x, cy + y);
+    plot(clip, cx + x, cy - y);
+    plot(clip, cx - x, cy - y);
+  }
+}
+
+
+int l_graphics_ellipse(lua_State *L) {
+  /* Midpoint ellipse algorithm; all decision variables are scaled by 4 so
+   * that only integer maths is required */
+  int fill = checkMode(L, 1);
+  int cx = toX(luaL_checknumber(L, 2));
+  int cy = toY(luaL_checknumber(L, 3));
+  int rx = abs((int) luaL_checknumber(L, 4));
+  int ry = abs((int) luaL_optnumber(L, 5, rx));
+  image_rect_t clip = getClip();
+  long long a2 = (long long) rx * rx, b2 = (long long) ry * ry;
+  long long x = 0, y = ry;
+  long long dx = 0, dy = 2 * a2 * y;
+  long long d;
+
+  if (rx == 0 || ry == 0) {
+    int i;
+    for (i = -ry; i <= ry; i++) hline(&clip, cx - rx, cx + rx + 1, cy + i);
+    return 0;
+  }
+
+  /* Region 1: slope > -1 */
+  d = 4 * b2 - 4 * a2 * ry + a2;
+  while (dx < dy) {
+    if (d < 0) {
+      if (!fill) ellipsePoints(&clip, cx, cy, x, y, 0);
+      x++;
+      dx += 2 * b2;
+      d += 4 * (dx + b2);
+    } else {
+      /* For filling only the widest span of each row is needed */
+      ellipsePoints(&clip, cx, cy, x, y, fill);
+      x++;
+      y--;
+      dx += 2 * b2;
+      dy -= 2 * a2;
+      d += 4 * (dx - dy + b2);
+    }
+  }
+
+  /* Region 2: slope < -1 */
+  d = b2 * (2 * x + 1) * (2 * x + 1) + 4 * a2 * (y - 1) * (y - 1) -
+      4 * a2 * b2;
+  while (y >= 0) {
+    ellipsePoints(&clip, cx, cy, x, y, fill);
+    if (d > 0) {
+      y--;
+      dy -= 2 * a2;
+      d += 4 * (a2 - dy);
+    } else {
+      y--;
+      x++;
+      dx += 2 * b2;
+      dy -= 2 * a2;
+      d += 4 * (dx - dy + a2);
+    }
+  }
+  return 0;
+}
+
+
+typedef struct {
+  int row, endrow;      /* First and last (exclusive) row the edge covers */
+  int x, dxdy;          /* 16.16 fixed point x at `row` and slope */
+} edge_t;
+
+
+static void fillPolygon(const image_rect_t *clip, const double *v, int n) {
+  /* Scanline fill using the even-odd rule, sampling pixel centres. Edge
+   * positions are stepped in fixed point so the inner loops are integer
+   * only */
+  static edge_t *edges;
+  static int *xs;
+  static int cap;
+  int i, j, nedges = 0, nverts = n / 2;
+  int minrow = INT_MAX, maxrow = INT_MIN;
+
+  if (nverts > cap) {
+    cap = nverts;
+    edges = realloc(edges, cap * sizeof(*edges));
+    xs = realloc(xs, cap * sizeof(*xs));
+  }
+
+  for (i = 0; i < nverts; i++) {
+    double x0 = v[i * 2] + graphics_transform.x;
+    double y0 = v[i * 2 + 1] + graphics_transform.y;
+    double x1 = v[((i + 1) % nverts) * 2] + graphics_transform.x;
+    double y1 = v[((i + 1) % nverts) * 2 + 1] + graphics_transform.y;
+    double slope;
+    edge_t *e;
+    if (y0 == y1) continue;
+    if (y0 > y1) {
+      double t;
+      t = x0; x0 = x1; x1 = t;
+      t = y0; y0 = y1; y1 = t;
+    }
+    e = &edges[nedges];
+    e->row = ceil(y0 - 0.5);
+    e->endrow = ceil(y1 - 0.5);
+    if (e->row >= e->endrow) continue;
+    slope = (x1 - x0) / (y1 - y0);
+    e->x = (x0 + (e->row + 0.5 - y0) * slope) * 65536.;
+    e->dxdy = slope * 65536.;
+    if (e->row < minrow) minrow = e->row;
+    if (e->endrow > maxrow) maxrow = e->endrow;
+    nedges++;
+  }
+
+  if (minrow < clip->y0) minrow = clip->y0;
+  if (maxrow > clip->y1) maxrow = clip->y1;
+
+  for (i = minrow; i < maxrow; i++) {
+    int count = 0;
+    /* Gather the crossings of this row, insertion sorted */
+    for (j = 0; j < nedges; j++) {
+      edge_t *e = &edges[j];
+      if (i >= e->row && i < e->endrow) {
+        int x = e->x + (long long) (i - e->row) * e->dxdy;
+        int k = count++;
+        while (k > 0 && xs[k - 1] > x) {
+          xs[k] = xs[k - 1];
+          k--;
+        }
+        xs[k] = x;
       }
     }
+    /* Fill pixels whose centres lie between pairs of crossings */
+    for (j = 0; j + 1 < count; j += 2) {
+      int x0 = (xs[j] - 0x8000 + 0xffff) >> 16;
+      int x1 = (xs[j + 1] - 0x8000 + 0xffff) >> 16;
+      hline(clip, x0, x1, i);
+    }
+  }
+}
+
+
+int l_graphics_polygon(lua_State *L) {
+  /* polygon(mode, x1, y1, x2, y2, ...) or polygon(mode, {x1, y1, ...}) */
+  int fill = checkMode(L, 1);
+  image_rect_t clip = getClip();
+  double *v;
+  int n = getNumbers(L, 2, &v);
+  if (n < 6) {
+    luaL_error(L, "need at least three vertices to draw a polygon");
+  }
+  if (fill) {
+    fillPolygon(&clip, v, n);
+  } else {
+    drawPolyline(&clip, v, n, 1);
   }
   return 0;
 }
@@ -441,12 +740,144 @@ int l_graphics_circle(lua_State *L) {
 
 int l_graphics_print(lua_State *L) {
   luaL_checkany(L, 1);
-  const char *str = luaL_tolstring(L, 1, NULL);
-  int x = luaL_checknumber(L, 2);
-  int y = luaL_checknumber(L, 3);
+  /* Read the arguments before luaL_tolstring() pushes onto the stack */
+  int x = toX(luaL_optnumber(L, 2, 0));
+  int y = toY(luaL_optnumber(L, 3, 0));
+  size_t len;
+  const char *str = luaL_tolstring(L, 1, &len);
   font_blit(graphics_font, graphics_canvas->data, graphics_canvas->width,
-            graphics_canvas->height, str, x, y);
+            graphics_canvas->height, str, len, x, y);
   return 0;
+}
+
+
+enum { ALIGN_LEFT, ALIGN_CENTER, ALIGN_RIGHT, ALIGN_JUSTIFY };
+
+typedef struct {
+  int x, y, limit, align;
+} printf_t;
+
+
+static void printfLine(void *udata, const char *str, int len, int width,
+                       int last) {
+  printf_t *p = udata;
+  font_t *font = graphics_font;
+  pixel_t *buf = graphics_canvas->data;
+  int bufw = graphics_canvas->width;
+  int bufh = graphics_canvas->height;
+  int x = p->x;
+
+  if (p->align == ALIGN_JUSTIFY && !last) {
+    /* Spread the remaining space over the gaps between words */
+    const char *s = str, *end = str + len, *q;
+    int gaps = 0, extra = p->limit - width, i = 0;
+    for (q = str; q < end; q++) {
+      if (*q == ' ' && q > str && q[-1] != ' ') gaps++;
+    }
+    while (s < end) {
+      for (q = s; q < end && *q != ' '; q++);
+      font_blit(font, buf, bufw, bufh, s, q - s, x, p->y);
+      x += font_getWidth(font, s, q - s);
+      for (s = q; q < end && *q == ' '; q++);
+      x += font_getWidth(font, s, q - s);
+      if (q < end && s > str && gaps > 0) {
+        x += extra / gaps + (i++ < extra % gaps);
+      }
+      s = q;
+    }
+  } else {
+    switch (p->align) {
+      case ALIGN_CENTER : x += (p->limit - width) / 2; break;
+      case ALIGN_RIGHT  : x += p->limit - width;       break;
+    }
+    font_blit(font, buf, bufw, bufh, str, len, x, p->y);
+  }
+  p->y += font->height;
+}
+
+
+int l_graphics_printf(lua_State *L) {
+  /* printf(text, x, y, limit [, align]) */
+  static const char *aligns[] = { "left", "center", "right", "justify", NULL };
+  printf_t p;
+  luaL_checkany(L, 1);
+  /* Read the arguments before luaL_tolstring() pushes onto the stack */
+  p.x = toX(luaL_checknumber(L, 2));
+  p.y = toY(luaL_checknumber(L, 3));
+  p.limit = luaL_checknumber(L, 4);
+  p.align = luaL_checkoption(L, 5, "left", aligns);
+  const char *str = luaL_tolstring(L, 1, NULL);
+  font_wrap(graphics_font, str, p.limit, printfLine, &p);
+  return 0;
+}
+
+
+int l_graphics_push(lua_State *L) {
+  static const char *types[] = { "transform", NULL };
+  luaL_checkoption(L, 1, "transform", types);
+  if (graphics_transformStackSize == TRANSFORM_STACK_MAX) {
+    luaL_error(L, "maximum stack depth reached (more pushes than pops?)");
+  }
+  graphics_transformStack[graphics_transformStackSize++] = graphics_transform;
+  return 0;
+}
+
+
+int l_graphics_pop(lua_State *L) {
+  if (graphics_transformStackSize == 0) {
+    luaL_error(L, "minimum stack depth reached (more pops than pushes?)");
+  }
+  graphics_transform = graphics_transformStack[--graphics_transformStackSize];
+  return 0;
+}
+
+
+int l_graphics_origin(lua_State *L) {
+  graphics_transform.x = 0;
+  graphics_transform.y = 0;
+  return 0;
+}
+
+
+int l_graphics_translate(lua_State *L) {
+  graphics_transform.x += luaL_checknumber(L, 1);
+  graphics_transform.y += luaL_checknumber(L, 2);
+  return 0;
+}
+
+
+int l_graphics_setScissor(lua_State *L) {
+  /* setScissor(x, y, width, height), or setScissor() to disable it. The
+   * rectangle is in screen coordinates and unaffected by translate() */
+  if (lua_isnoneornil(L, 1)) {
+    graphics_scissor = 0;
+    image_setClip(INT_MIN, INT_MIN, INT_MAX, INT_MAX);
+    return 0;
+  }
+  int x = luaL_checknumber(L, 1);
+  int y = luaL_checknumber(L, 2);
+  int w = luaL_checknumber(L, 3);
+  int h = luaL_checknumber(L, 4);
+  if (w < 0 || h < 0) {
+    luaL_error(L, "scissor width and height must not be negative");
+  }
+  graphics_scissor = 1;
+  graphics_scissorRect[0] = x;
+  graphics_scissorRect[1] = y;
+  graphics_scissorRect[2] = w;
+  graphics_scissorRect[3] = h;
+  image_setClip(x, y, x + w, y + h);
+  return 0;
+}
+
+
+int l_graphics_getScissor(lua_State *L) {
+  int i;
+  if (!graphics_scissor) return 0;
+  for (i = 0; i < 4; i++) {
+    lua_pushinteger(L, graphics_scissorRect[i]);
+  }
+  return 4;
 }
 
 
@@ -480,6 +911,16 @@ int luaopen_graphics(lua_State *L) {
     { "rectangle",          l_graphics_rectangle          },
     { "circle",             l_graphics_circle             },
     { "print",              l_graphics_print              },
+    { "printf",             l_graphics_printf             },
+    { "points",             l_graphics_points             },
+    { "polygon",            l_graphics_polygon            },
+    { "ellipse",            l_graphics_ellipse            },
+    { "push",               l_graphics_push               },
+    { "pop",                l_graphics_pop                },
+    { "origin",             l_graphics_origin             },
+    { "translate",          l_graphics_translate          },
+    { "setScissor",         l_graphics_setScissor         },
+    { "getScissor",         l_graphics_getScissor         },
     { "newImage",           l_image_new                   },
     { "newCanvas",          l_image_newCanvas             },
     { "newQuad",            l_quad_new                    },
