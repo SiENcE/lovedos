@@ -189,11 +189,21 @@ static void process_source(cm_Source *src, int len) {
     if (src->rate == FX_UNIT) {
       /* Add audio to buffer -- basic */
       n = frame * 2;
-      for (i = 0; i < count; i++) {
-        dst[0] += (src->buffer[(n    ) & BUFFER_MASK] * src->lgain) >> FX_BITS;
-        dst[1] += (src->buffer[(n + 1) & BUFFER_MASK] * src->rgain) >> FX_BITS;
-        n += 2;
-        dst += 2;
+      if (src->lgain == FX_UNIT && src->rgain == FX_UNIT) {
+        /* Unity gain: no multiplications, which are slow on older CPUs */
+        for (i = 0; i < count; i++) {
+          dst[0] += src->buffer[(n    ) & BUFFER_MASK];
+          dst[1] += src->buffer[(n + 1) & BUFFER_MASK];
+          n += 2;
+          dst += 2;
+        }
+      } else {
+        for (i = 0; i < count; i++) {
+          dst[0] += (src->buffer[(n    ) & BUFFER_MASK] * src->lgain) >> FX_BITS;
+          dst[1] += (src->buffer[(n + 1) & BUFFER_MASK] * src->rgain) >> FX_BITS;
+          n += 2;
+          dst += 2;
+        }
       }
       src->position += count * FX_UNIT;
 
@@ -222,6 +232,12 @@ void cm_process(cm_Int16 *dst, int len) {
   int i;
   cm_Source **s;
 
+  /* Output silence without mixing if nothing is playing */
+  if (!cmixer.sources) {
+    memset(dst, 0, len * sizeof(*dst));
+    return;
+  }
+
   /* Process in chunks of BUFFER_SIZE if `len` is larger than BUFFER_SIZE */
   while (len > BUFFER_SIZE) {
     cm_process(dst, BUFFER_SIZE);
@@ -248,9 +264,16 @@ void cm_process(cm_Int16 *dst, int len) {
   unlock();
 
   /* Copy internal buffer to destination and clip */
-  for (i = 0; i < len; i++) {
-    int x = (cmixer.buffer[i] * cmixer.gain) >> FX_BITS;
-    dst[i] = CLAMP(x, -32768, 32767);
+  if (cmixer.gain == FX_UNIT) {
+    for (i = 0; i < len; i++) {
+      int x = cmixer.buffer[i];
+      dst[i] = CLAMP(x, -32768, 32767);
+    }
+  } else {
+    for (i = 0; i < len; i++) {
+      int x = (cmixer.buffer[i] * cmixer.gain) >> FX_BITS;
+      dst[i] = CLAMP(x, -32768, 32767);
+    }
   }
 }
 
