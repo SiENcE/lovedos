@@ -1,0 +1,11 @@
+-- Number literals and tonumber() must be parsed exactly (DJGPP's strtod is
+-- not accurate)
+local t = require("testlib")
+t.check("0.5 == 1/2", 0.5 == 1 / 2)
+t.check("0.25 == 1/4", 0.25 == 1 / 4)
+t.check("0.1 * 10 == 1", 0.1 * 10 == 1)
+t.check("1e-5", 1e-5 == 1 / 100000)
+t.check("tonumber", tonumber("0.75") == 3 / 4 and tonumber("  2.5e3 ") == 2500)
+t.check("hex", 0x10 == 16 and tonumber("0x1p4") == nil or tonumber("0x1p4") == 16)
+t.check("format round trip", tonumber(string.format("%.17g", 0.1)) == 0.1)
+t.finish()

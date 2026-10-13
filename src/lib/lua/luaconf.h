@@ -419,7 +419,9 @@
 ** systems, you can leave 'lua_strx2number' undefined and Lua will
 ** provide its own implementation.
 */
-#define lua_str2number(s,p)	strtod((s), (p))
+/* LoveDOS: DJGPP's strtod() is inaccurate (eg. "0.5" gives
+** 0.49999999999999991) while its strtold() is not */
+#define lua_str2number(s,p)	((double) strtold((s), (p)))
 
 #if defined(LUA_USE_STRTODHEX)
 #define lua_strx2number(s,p)	strtod((s), (p))
