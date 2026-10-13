@@ -10,6 +10,9 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <dirent.h>
+#include <dir.h>
+#include <time.h>
+#include <unistd.h>
 #include <sys/stat.h>
 
 #include "lib/microtar/microtar.h"
@@ -20,12 +23,6 @@
 #define MAX_MOUNTS  8
 #define MAX_PATH    256
 
-enum {
-  FILESYSTEM_TNONE,
-  FILESYSTEM_TREG,
-  FILESYSTEM_TDIR,
-};
-
 typedef struct mount_t mount_t;
 
 struct mount_t {
@@ -34,6 +31,9 @@ struct mount_t {
   int (*isFile)(mount_t *mnt, const char *filename);
   int (*isDirectory)(mount_t *mnt, const char *filename);
   void *(*read)(mount_t *mnt, const char *filename, int *size);
+  int (*getInfo)(mount_t *mnt, const char *filename, filesystem_info_t *info);
+  void (*list)(mount_t *mnt, const char *dir, filesystem_listCallback cb,
+               void *udata);
   void *udata;
   char path[MAX_PATH];
 };
@@ -177,6 +177,69 @@ static int dir_isDirectory(mount_t *mnt, const char *filename) {
 }
 
 
+static long dos_time(unsigned date, unsigned time) {
+  /* Converts a DOS file date and time to seconds since the epoch */
+  struct tm t;
+  memset(&t, 0, sizeof(t));
+  t.tm_year = ((date >> 9) & 0x7f) + 80;
+  t.tm_mon = ((date >> 5) & 0x0f) - 1;
+  t.tm_mday = date & 0x1f;
+  t.tm_hour = (time >> 11) & 0x1f;
+  t.tm_min = (time >> 5) & 0x3f;
+  t.tm_sec = (time & 0x1f) * 2;
+  t.tm_isdst = -1;
+  return mktime(&t);
+}
+
+
+static int dir_getInfo(mount_t *mnt, const char *filename,
+                       filesystem_info_t *info) {
+  /* findfirst() gets the type, size and date with a single DOS call */
+  char buf[MAX_PATH];
+  struct ffblk ff;
+  if (concat_path(buf, mnt->path, filename)) {
+    return 0;
+  }
+  strip_trailing_slash(buf);
+  if (findfirst(buf, &ff, FA_DIREC | FA_RDONLY | FA_HIDDEN | FA_SYSTEM |
+                          FA_ARCH) != 0) {
+    /* The root of a drive or mount has no directory entry */
+    if (get_file_type(buf) == FILESYSTEM_TDIR) {
+      info->type = FILESYSTEM_TDIR;
+      info->size = 0;
+      info->modtime = -1;
+      return 1;
+    }
+    return 0;
+  }
+  info->type = (ff.ff_attrib & FA_DIREC) ? FILESYSTEM_TDIR : FILESYSTEM_TREG;
+  info->size = info->type == FILESYSTEM_TREG ? (long) ff.ff_fsize : 0;
+  info->modtime = dos_time(ff.ff_fdate, ff.ff_ftime);
+  return 1;
+}
+
+
+static void dir_list(mount_t *mnt, const char *dir,
+                     filesystem_listCallback cb, void *udata) {
+  char buf[MAX_PATH];
+  DIR *d;
+  struct dirent *e;
+  if (concat_path(buf, mnt->path, dir)) {
+    return;
+  }
+  d = opendir(buf);
+  if (!d) {
+    return;
+  }
+  while ((e = readdir(d))) {
+    if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..")) {
+      cb(udata, e->d_name);
+    }
+  }
+  closedir(d);
+}
+
+
 static void* dir_read(mount_t *mnt, const char *filename, int *size) {
   char buf[MAX_PATH];
   /* Make fullpath */
@@ -218,6 +281,8 @@ static int dir_mount(mount_t *mnt, const char *path) {
   mnt->isFile = dir_isFile;
   mnt->isDirectory = dir_isDirectory;
   mnt->read = dir_read;
+  mnt->getInfo = dir_getInfo;
+  mnt->list = dir_list;
 
   /* Return ok */
   return FILESYSTEM_ESUCCESS;
@@ -320,6 +385,52 @@ static void* tar_read(mount_t *mnt, const char *filename, int *size) {
 }
 
 
+static int tar_getInfo(mount_t *mnt, const char *filename,
+                       filesystem_info_t *info) {
+  mtar_header_t h;
+  if (tar_find(mnt, filename, &h)) {
+    /* Directories without their own entry in the archive */
+    if (!*filename) {
+      info->type = FILESYSTEM_TDIR;
+      info->size = 0;
+      info->modtime = -1;
+      return 1;
+    }
+    return 0;
+  }
+  info->type = h.type == MTAR_TDIR ? FILESYSTEM_TDIR : FILESYSTEM_TREG;
+  info->size = info->type == FILESYSTEM_TREG ? (long) h.size : 0;
+  info->modtime = h.mtime;
+  return 1;
+}
+
+
+static void tar_list(mount_t *mnt, const char *dir,
+                     filesystem_listCallback cb, void *udata) {
+  /* Lists the entries whose names start with "dir/"; files inside
+   * subdirectories without an entry of their own list the subdirectory */
+  tar_mount_t *tm = mnt->udata;
+  mtar_header_t h;
+  char prefix[MAX_PATH];
+  int i, plen;
+  strcpy(prefix, dir);
+  strip_trailing_slash(prefix);
+  if (*prefix) strcat(prefix, "/");
+  plen = strlen(prefix);
+  for (i = 0; i < tm->nfiles; i++) {
+    char *name, *slash;
+    mtar_seek(&tm->tar, tm->map[i].pos);
+    if (mtar_read_header(&tm->tar, &h)) continue;
+    strip_trailing_slash(h.name);
+    if (strncasecmp(h.name, prefix, plen) || !h.name[plen]) continue;
+    name = h.name + plen;
+    slash = strchr(name, '/');
+    if (slash) *slash = '\0';
+    cb(udata, name);
+  }
+}
+
+
 static int tar_stream_read(mtar_t *tar, void *data, unsigned size) {
   tar_mount_t *tm = tar->stream;
   unsigned res = fread(data, 1, size, tm->fp);
@@ -415,6 +526,8 @@ static int tar_mount(mount_t *mnt, const char *path) {
   mnt->isFile = tar_isFile;
   mnt->isDirectory = tar_isDirectory;
   mnt->read = tar_read;
+  mnt->getInfo = tar_getInfo;
+  mnt->list = tar_list;
 
   /* Return ok */
   return FILESYSTEM_ESUCCESS;
@@ -544,6 +657,88 @@ void* filesystem_read(const char *filename, int *size) {
     }
   }
   return NULL;
+}
+
+
+int filesystem_getInfo(const char *filename, filesystem_info_t *info) {
+  /* Fills `info` from the first mount containing the file and returns its
+   * index (counted from the most recent mount), or -1 if there is none */
+  int i = 0;
+  FOREACH_MOUNT(mnt) {
+    if (mnt->getInfo(mnt, filename, info)) {
+      return i;
+    }
+    i++;
+  }
+  return -1;
+}
+
+
+const char *filesystem_getRealDirectory(const char *filename) {
+  FOREACH_MOUNT(mnt) {
+    if (mnt->exists(mnt, filename)) {
+      return mnt->path;
+    }
+  }
+  return NULL;
+}
+
+
+void filesystem_list(const char *dir, filesystem_listCallback cb,
+                     void *udata) {
+  /* Calls `cb` with the name of each entry of `dir` in every mount; names
+   * can be reported more than once */
+  FOREACH_MOUNT(mnt) {
+    mnt->list(mnt, dir, cb, udata);
+  }
+}
+
+
+static int write_path(char *buf, const char *filename) {
+  if (!*filesystem_writeDir) {
+    return FILESYSTEM_ENOWRITEDIR;
+  }
+  return concat_path(buf, filesystem_writeDir, filename);
+}
+
+
+int filesystem_append(const char *filename, const void *data, int size) {
+  char buf[MAX_PATH];
+  int n, err = write_path(buf, filename);
+  FILE *fp;
+  if (err) return err;
+  fp = fopen(buf, "ab");
+  if (!fp) return FILESYSTEM_EWRITEFAIL;
+  n = fwrite(data, 1, size, fp);
+  fclose(fp);
+  return n == size ? FILESYSTEM_ESUCCESS : FILESYSTEM_EWRITEFAIL;
+}
+
+
+int filesystem_remove(const char *filename) {
+  /* Removes a file or an empty directory from the write directory */
+  char buf[MAX_PATH];
+  int err = write_path(buf, filename);
+  if (err) return err;
+  strip_trailing_slash(buf);
+  if (get_file_type(buf) == FILESYSTEM_TDIR) {
+    return rmdir(buf) == 0 ? FILESYSTEM_ESUCCESS : FILESYSTEM_EFAILURE;
+  }
+  return remove(buf) == 0 ? FILESYSTEM_ESUCCESS : FILESYSTEM_EFAILURE;
+}
+
+
+int filesystem_createDirectory(const char *path) {
+  /* Creates a directory (and its parents) in the write directory */
+  char buf[MAX_PATH];
+  int err = write_path(buf, path);
+  if (err) return err;
+  return make_dirs(buf);
+}
+
+
+const char *filesystem_getWriteDir(void) {
+  return filesystem_writeDir;
 }
 
 

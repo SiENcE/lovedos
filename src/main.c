@@ -93,11 +93,19 @@ int main(int argc, char **argv) {
 
   /* Init embedded scripts */
   #include "nogame_lua.h"
+  #include "filesystem_lua.h"
+  #include "math_lua.h"
+  #include "event_lua.h"
+  #include "joystick_lua.h"
   #include "boot_lua.h"
   struct {
     const char *name, *data; int size;
   } items[] = {
-    { "nogame.lua",   nogame_lua,   sizeof(nogame_lua)  },
+    { "nogame.lua",     nogame_lua,     sizeof(nogame_lua)      },
+    { "filesystem.lua", filesystem_lua, sizeof(filesystem_lua)  },
+    { "math.lua",       math_lua,       sizeof(math_lua)        },
+    { "event.lua",      event_lua,      sizeof(event_lua)       },
+    { "joystick.lua",   joystick_lua,   sizeof(joystick_lua)    },
     { "boot.lua",     boot_lua,     sizeof(boot_lua)    },
     { NULL, NULL, 0 }
   };

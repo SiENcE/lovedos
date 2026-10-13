@@ -42,11 +42,7 @@ static int graphics_scissor;
 static int graphics_scissorRect[4];
 
 
-static inline int fastFloor(double x) {
-  /* Cheaper than floor(), which is a library call */
-  int i = x;
-  return i - (x < i);
-}
+#define fastFloor image_floor
 
 
 static inline int toX(double x) {
@@ -293,47 +289,33 @@ int l_graphics_present(lua_State *L) {
 }
 
 
-int l_graphics_draw(lua_State *L) {
-  /* draw(image, [quad,] x, y, r, sx, sy, ox, oy) or, as in older versions of
-   * LoveDOS, draw(image, [quad,] x, y, flip) */
-  image_t *img = luaobj_checkudata(L, 1, LUAOBJ_TYPE_IMAGE);
-  quad_t *quad = NULL;
-  int i = 2;
-  int srcx, srcy, srcw, srch;
+void graphics_drawImage(lua_State *L, image_t *img, int i,
+                        int srcx, int srcy, int srcw, int srch,
+                        double offx, double offy) {
+  /* Draws the source rectangle of `img` using the arguments from `i`
+   * onwards: x, y, r, sx, sy, ox, oy -- or x, y, flip as in older versions of
+   * LoveDOS. `offx`, `offy` is the position of the image within the
+   * drawable, which is non-zero for Text objects */
   double x, y, r = 0, sx = 1, sy = 1, ox = 0, oy = 0;
   pixel_t *buf = graphics_canvas->data;
   int bufw = graphics_canvas->width;
   int bufh = graphics_canvas->height;
 
-  if (!lua_isnone(L, 2) && lua_type(L, 2) != LUA_TNUMBER) {
-    quad = luaobj_checkudata(L, 2, LUAOBJ_TYPE_QUAD);
-    i = 3;
-  }
-  if (quad) {
-    srcx = quad->x;
-    srcy = quad->y;
-    srcw = quad->width;
-    srch = quad->height;
-  } else {
-    srcx = srcy = 0;
-    srcw = img->width;
-    srch = img->height;
-  }
   x = luaL_optnumber(L, i, 0) + graphics_transform.x;
   y = luaL_optnumber(L, i + 1, 0) + graphics_transform.y;
 
   if (lua_gettop(L) <= i + 1 || lua_type(L, i + 2) == LUA_TBOOLEAN) {
     /* No transformation, or the legacy horizontal flip argument */
     image_setFlip(lua_toboolean(L, i + 2));
-    image_blit(img, buf, bufw, bufh, fastFloor(x), fastFloor(y),
+    image_blit(img, buf, bufw, bufh, fastFloor(x + offx), fastFloor(y + offy),
                srcx, srcy, srcw, srch);
-    return 0;
+    return;
   }
   r  = luaL_optnumber(L, i + 2, 0);
   sx = luaL_optnumber(L, i + 3, 1);
   sy = luaL_optnumber(L, i + 4, sx);
-  ox = luaL_optnumber(L, i + 5, 0);
-  oy = luaL_optnumber(L, i + 6, 0);
+  ox = luaL_optnumber(L, i + 5, 0) - offx;
+  oy = luaL_optnumber(L, i + 6, 0) - offy;
 
   if (r == 0 && sy == 1 && (sx == 1 || sx == -1)) {
     /* Fast path: an unscaled image, optionally mirrored horizontally */
@@ -344,6 +326,44 @@ int l_graphics_draw(lua_State *L) {
   } else {
     image_drawTransformed(img, buf, bufw, bufh, srcx, srcy, srcw, srch,
                           x, y, r, sx, sy, ox, oy);
+  }
+}
+
+
+void graphics_getTranslation(double *x, double *y) {
+  *x = graphics_transform.x;
+  *y = graphics_transform.y;
+}
+
+
+int l_spritebatch_draw(lua_State *L);
+int l_text_draw(lua_State *L);
+
+int l_graphics_draw(lua_State *L) {
+  /* draw(drawable, [quad,] x, y, r, sx, sy, ox, oy); drawables are Images,
+   * SpriteBatches and Texts */
+  image_t *img;
+  quad_t *quad = NULL;
+  int i = 2;
+
+  /* Check the object's type bits before its metatable: looking up the
+   * metatable by name for every draw call is slow on a 386 */
+  luaobj_head_t *head = lua_touserdata(L, 1);
+  if (head && (head->type & (LUAOBJ_TYPE_SPRITEBATCH | LUAOBJ_TYPE_TEXT))) {
+    if (luaL_testudata(L, 1, "SpriteBatch")) return l_spritebatch_draw(L);
+    if (luaL_testudata(L, 1, "Text")) return l_text_draw(L);
+  }
+
+  img = luaobj_checkudata(L, 1, LUAOBJ_TYPE_IMAGE);
+  if (!lua_isnone(L, 2) && lua_type(L, 2) != LUA_TNUMBER) {
+    quad = luaobj_checkudata(L, 2, LUAOBJ_TYPE_QUAD);
+    i = 3;
+  }
+  if (quad) {
+    graphics_drawImage(L, img, i, quad->x, quad->y, quad->width, quad->height,
+                       0, 0);
+  } else {
+    graphics_drawImage(L, img, i, 0, 0, img->width, img->height, 0, 0);
   }
   return 0;
 }
@@ -730,63 +750,24 @@ int l_graphics_print(lua_State *L) {
 }
 
 
-enum { ALIGN_LEFT, ALIGN_CENTER, ALIGN_RIGHT, ALIGN_JUSTIFY };
-
-typedef struct {
-  int x, y, limit, align;
-} printf_t;
-
-
-static void printfLine(void *udata, const char *str, int len, int width,
-                       int last) {
-  printf_t *p = udata;
-  font_t *font = graphics_font;
-  pixel_t *buf = graphics_canvas->data;
-  int bufw = graphics_canvas->width;
-  int bufh = graphics_canvas->height;
-  int x = p->x;
-
-  if (p->align == ALIGN_JUSTIFY && !last) {
-    /* Spread the remaining space over the gaps between words */
-    const char *s = str, *end = str + len, *q;
-    int gaps = 0, extra = p->limit - width, i = 0;
-    for (q = str; q < end; q++) {
-      if (*q == ' ' && q > str && q[-1] != ' ') gaps++;
-    }
-    while (s < end) {
-      for (q = s; q < end && *q != ' '; q++);
-      font_blit(font, buf, bufw, bufh, s, q - s, x, p->y);
-      x += font_getWidth(font, s, q - s);
-      for (s = q; q < end && *q == ' '; q++);
-      x += font_getWidth(font, s, q - s);
-      if (q < end && s > str && gaps > 0) {
-        x += extra / gaps + (i++ < extra % gaps);
-      }
-      s = q;
-    }
-  } else {
-    switch (p->align) {
-      case ALIGN_CENTER : x += (p->limit - width) / 2; break;
-      case ALIGN_RIGHT  : x += p->limit - width;       break;
-    }
-    font_blit(font, buf, bufw, bufh, str, len, x, p->y);
-  }
-  p->y += font->height;
+static void printfSpan(void *udata, const char *str, int len, int x, int y) {
+  font_blit(graphics_font, graphics_canvas->data, graphics_canvas->width,
+            graphics_canvas->height, str, len, x, y);
 }
 
 
 int l_graphics_printf(lua_State *L) {
   /* printf(text, x, y, limit [, align]) */
   static const char *aligns[] = { "left", "center", "right", "justify", NULL };
-  printf_t p;
   luaL_checkany(L, 1);
   /* Read the arguments before luaL_tolstring() pushes onto the stack */
-  p.x = toX(luaL_checknumber(L, 2));
-  p.y = toY(luaL_checknumber(L, 3));
-  p.limit = luaL_checknumber(L, 4);
-  p.align = luaL_checkoption(L, 5, "left", aligns);
+  int x = toX(luaL_checknumber(L, 2));
+  int y = toY(luaL_checknumber(L, 3));
+  int limit = luaL_checknumber(L, 4);
+  int align = luaL_checkoption(L, 5, "left", aligns);
   const char *str = luaL_tolstring(L, 1, NULL);
-  font_wrap(graphics_font, str, p.limit, printfLine, &p);
+  if (limit < 0) limit = 0;
+  font_layout(graphics_font, str, -1, x, y, limit, align, printfSpan, NULL);
   return 0;
 }
 
@@ -861,11 +842,23 @@ int l_graphics_getScissor(lua_State *L) {
 
 
 
-int l_graphics_setColorRange(lua_State *L) {
-  /* Internal: called by boot.lua with 1 for LÖVE 11 games, else 255 */
-  double max = luaL_checknumber(L, 1);
-  color_setRange(max == 1 ? 1 : 255);
-  return 0;
+int l_spritebatch_new(lua_State *L);
+int l_text_new(lua_State *L);
+int l_font_newImageFont(lua_State *L);
+int l_font_new(lua_State *L);
+
+
+int l_graphics_setNewFont(lua_State *L) {
+  /* setNewFont(...): creates a font with the arguments of newFont(), sets it
+   * and returns it */
+  int n = lua_gettop(L);
+  lua_pushcfunction(L, l_font_new);
+  lua_insert(L, 1);
+  lua_call(L, n, 1);
+  lua_pushcfunction(L, l_graphics_setFont);
+  lua_pushvalue(L, -2);
+  lua_call(L, 1, 0);
+  return 1;
 }
 
 
@@ -876,7 +869,6 @@ int l_font_new(lua_State *L);
 
 int luaopen_graphics(lua_State *L) {
   luaL_Reg reg[] = {
-    { "_setColorRange",     l_graphics_setColorRange      },
     { "getDimensions",      l_graphics_getDimensions      },
     { "getWidth",           l_graphics_getWidth           },
     { "getHeight",          l_graphics_getHeight          },
@@ -913,6 +905,10 @@ int luaopen_graphics(lua_State *L) {
     { "newCanvas",          l_image_newCanvas             },
     { "newQuad",            l_quad_new                    },
     { "newFont",            l_font_new                    },
+    { "newImageFont",       l_font_newImageFont           },
+    { "setNewFont",         l_graphics_setNewFont         },
+    { "newSpriteBatch",     l_spritebatch_new             },
+    { "newText",            l_text_new                    },
     { 0, 0 },
   };
   luaL_newlib(L, reg);

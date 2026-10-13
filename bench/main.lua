@@ -1,7 +1,8 @@
 --
 -- LoveDOS benchmark: measures the CPU used by audio mixing and the time taken
 -- by graphics operations. Run it with `love bench`; the results are shown on
--- screen and written to `save/bench.txt`.
+-- screen and written to `save/bench.txt`. With `love bench --quit` it exits
+-- once the results are written.
 --
 
 local results = {}
@@ -139,22 +140,36 @@ local function graphicsBenchmarks()
   bench("points, 50 in one call", function() g.points(pts) end)
   bench("point, 50 calls",
         function() for i = 1, 50 do g.point(i, i) end end)
+  bench("draw 16x16, 100 calls", function()
+    for i = 0, 99 do g.draw(spr, (i % 10) * 20, math.floor(i / 10) * 18) end
+  end)
+  local batch = g.newSpriteBatch(spr, 100)
+  for i = 0, 99 do batch:add((i % 10) * 20, math.floor(i / 10) * 18) end
+  bench("SpriteBatch, 100 sprites", function() g.draw(batch) end)
+  local t43 = g.newText(g.getFont(), text)
+  local t176 = g.newText(g.getFont())
+  t176:setf(para, 150, "left")
   bench("print 43 chars", function() g.print(text, 0, 100) end)
+  bench("Text 43 chars", function() g.draw(t43, 0, 100) end)
   bench("printf 43 chars", function() g.printf(text, 0, 100, 320) end)
   bench("print 176 chars", function() g.print(para, 0, 100) end)
   bench("printf 176 chars, wrapped",
         function() g.printf(para, 0, 100, 150) end)
+  bench("Text 176 chars, wrapped", function() g.draw(t176, 0, 100) end)
   bench("printf 176 chars, justified",
         function() g.printf(para, 0, 100, 150, "justify") end)
 end
 
 
-function love.load()
+function love.load(args)
   empty = timeit(function() end)
   out("LoveDOS", love.getVersion())
   audioBenchmarks()
   graphicsBenchmarks()
   love.filesystem.write("bench.txt", table.concat(results, "\r\n") .. "\r\n")
+  if args[1] == "--quit" then
+    love.event.quit()
+  end
 end
 
 

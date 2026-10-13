@@ -1,0 +1,10 @@
+local t = require("testlib")
+function love.load()
+  local img = love.graphics.newCanvas(2, 2)
+  local batch = love.graphics.newSpriteBatch(img)
+  local id = batch:add(0, 0)
+  t.check("ids start at 1 (LÖVE 11)", id == 1 and batch:add(1, 1) == 2)
+  batch:set(1, 5, 5)
+  t.check("set id 1", not t.errors(batch.set, batch, 2, 0, 0) and t.errors(batch.set, batch, 0, 0, 0))
+  t.finish()
+end

@@ -5,6 +5,7 @@
  * under the terms of the MIT license. See LICENSE for details.
  */
 
+#include <string.h>
 #include "font.h"
 #include "luaobj.h"
 
@@ -29,6 +30,31 @@ int l_font_new(lua_State *L) {
     if (err) luaL_error(L, err);
   } else {
     font_initEmbedded(self, ptsize);
+  }
+  return 1;
+}
+
+
+int l_font_newImageFont(lua_State *L) {
+  /* newImageFont(filename or image, glyphs [, extraspacing]) */
+  const char *glyphs = luaL_checkstring(L, 2);
+  int spacing = luaL_optnumber(L, 3, 0);
+  image_t tmp, *img = NULL;
+  const char *err;
+  font_t *self;
+  if (lua_type(L, 1) == LUA_TSTRING) {
+    err = image_init(&tmp, lua_tostring(L, 1));
+    if (err) luaL_error(L, "%s", err);
+  } else {
+    img = luaobj_checkudata(L, 1, LUAOBJ_TYPE_IMAGE);
+  }
+  self = luaobj_newudata(L, sizeof(*self));
+  luaobj_setclass(L, CLASS_TYPE, CLASS_NAME);
+  err = font_initImage(self, img ? img : &tmp, glyphs, spacing);
+  if (!img) image_deinit(&tmp);
+  if (err) {
+    memset(self, 0, sizeof(*self));
+    luaL_error(L, "%s", err);
   }
   return 1;
 }

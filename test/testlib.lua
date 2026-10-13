@@ -29,4 +29,12 @@ function t.finish()
   love.event.quit()
 end
 
+-- Log errors and exit instead of waiting for a key on the error screen
+function love.errorhandler(msg)
+  t.log("ERROR", msg, debug.traceback("", 2))
+  t.log("fails", "error")
+  log:close()
+  return function() return 1 end
+end
+
 return t

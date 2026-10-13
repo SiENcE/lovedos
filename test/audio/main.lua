@@ -1,0 +1,118 @@
+local t0 = require("testlib")
+local wavgen = require("wavgen")
+local out, check, errs = t0.log, t0.check, t0.errors
+
+local function near(a, b, eps) return math.abs(a - b) <= (eps or 1e-3) end
+local errs = t0.errors
+
+local src440, stereo, gen, gen8, clone, s8
+local events = {}
+local function at(t, f) table.insert(events, { t = t, f = f }) end
+local t = 0
+
+function love.load()
+  wavgen.write("tone440.wav", 22050, 16, { 440 }, 1)
+  wavgen.write("tone660.wav", 22050, 16, { 660 }, 1)
+  wavgen.write("stereo.wav", 44100, 16, { 440, 660 }, 1)
+  wavgen.write("tone8.wav", 11025, 8, { 300 }, 0.5)
+  -- love.sound / SoundData
+  local sd = love.sound.newSoundData(11025, 22050, 16, 1)
+  check("sd count", sd:getSampleCount() == 11025)
+  check("sd rate", sd:getSampleRate() == 22050)
+  check("sd bits", sd:getBitDepth() == 16)
+  check("sd channels", sd:getChannelCount() == 1 and sd:getChannels() == 1)
+  check("sd duration", near(sd:getDuration(), 0.5))
+  check("sd size", sd:getSize() == 22050)
+  check("sd silent", sd:getSample(100) == 0)
+  for i = 0, sd:getSampleCount() - 1 do
+    sd:setSample(i, 0.5 * math.sin(i / 22050 * 1000 * 2 * math.pi))
+  end
+  sd:setSample(0, 2)
+  check("sd clamp", sd:getSample(0) == 1)
+  sd:setSample(0, 0.25)
+  check("sd roundtrip", near(sd:getSample(0), 0.25, 1e-4))
+  check("sd oob", errs(sd.getSample, sd, 11025))
+  check("sd neg", errs(sd.getSample, sd, -1))
+  local def = love.sound.newSoundData(10)
+  check("sd defaults", def:getSampleRate() == 44100 and def:getBitDepth() == 16 and def:getChannelCount() == 2)
+  local sd8 = love.sound.newSoundData(4, 8000, 8, 2)
+  check("sd8 silent", sd8:getSample(0) == 0 and sd8:getSample(3, 2) == 0)
+  sd8:setSample(3, 2, -1)
+  check("sd8 channel set", sd8:getSample(7) == -1 and sd8:getSample(3, 1) == 0)
+  check("sd8 bad channel", errs(sd8.getSample, sd8, 0, 3))
+  check("sd8 oob frame", errs(sd8.getSample, sd8, 4, 1))
+  check("sd8 string", #sd8:getString() == 8)
+  local c = sd8:clone()
+  sd8:setSample(0, 1)
+  check("sd clone is copy", c:getSample(0) == 0 and sd8:getSample(0) == 1)
+  check("sd bad bits", errs(love.sound.newSoundData, 10, 22050, 24, 1))
+  check("sd zero", errs(love.sound.newSoundData, 0))
+  local sw = love.sound.newSoundData("stereo.wav")
+  check("sd wav", sw:getChannelCount() == 2 and sw:getSampleRate() == 44100 and sw:getSampleCount() == 44100)
+  check("sd missing file", errs(love.sound.newSoundData, "nope.wav"))
+  check("sd bad format", errs(love.sound.newSoundData, "main.lua"))
+
+  -- Source
+  src440 = love.audio.newSource("tone440.wav")
+  check("src type default", src440:getType() == "stream")
+  check("src type static", love.audio.newSource("tone440.wav", "static"):getType() == "static")
+  check("src bad type", errs(love.audio.newSource, "tone440.wav", "queue"))
+  check("src duration", near(src440:getDuration(), 1) and src440:getDuration("samples") == 22050)
+  check("src channels", src440:getChannelCount() == 1 and src440:getChannels() == 1)
+  check("src volume", src440:getVolume() == 1)
+  check("src pitch", src440:getPitch() == 1)
+  check("src limits", select(1, src440:getVolumeLimits()) == 0 and select(2, src440:getVolumeLimits()) == 1)
+  check("src bad limits", errs(src440.setVolumeLimits, src440, 0.5, 0.2))
+  check("src bad pitch", errs(src440.setPitch, src440, 0) and errs(src440.setPitch, src440, -1) and errs(src440.setPitch, src440, 1/0))
+  check("src looping", src440:isLooping() == false)
+  check("src stopped", src440:isStopped() and not src440:isPlaying() and not src440:isPaused())
+  src440:seek(0.25)
+  check("src seek stopped", near(src440:tell(), 0.25) and src440:tell("samples") == 5512)
+  src440:seek(5512, "samples")
+  check("src seek samples", src440:tell("samples") == 5512)
+  src440:stop()
+  check("src stop rewinds", src440:tell() == 0)
+  check("src bad seek", errs(src440.seek, src440, -1))
+  stereo = love.audio.newSource("stereo.wav")
+  check("stereo channels", stereo:getChannelCount() == 2)
+  gen = love.audio.newSource(sd)
+  check("gen static", gen:getType() == "static" and near(gen:getDuration(), 0.5))
+  s8 = love.audio.newSource("tone8.wav")
+  check("8bit duration", near(s8:getDuration(), 0.5))
+  clone = gen:clone()
+  check("clone", clone:getType() == "static" and near(clone:getDuration(), 0.5) and clone:isStopped())
+  check("audio volume", love.audio.getVolume() == 1)
+  check("no active", love.audio.getActiveSourceCount() == 0 and love.audio.getSourceCount() == 0)
+  check("play bad arg", errs(love.audio.play))
+
+  -- Timeline (seconds after load)
+  at(1.0, function() check("play returns true", src440:play() == true); out("A play 440", t) end)
+  at(1.5, function() src440:pause(); out("A pause tell", src440:tell()); check("paused", src440:isPaused())
+                     check("paused counts active", love.audio.getActiveSourceCount() == 1) end)
+  at(2.0, function() love.audio.resume(); check("resumed", src440:isPlaying()) end)
+  at(3.0, function() check("finished", src440:isStopped()); check("finished inactive", love.audio.getActiveSourceCount() == 0)
+                     stereo:seek(0.5); stereo:play(); out("B stereo from 0.5", t) end)
+  at(4.0, function() gen:setPitch(0.5); check("pitch get", gen:getPitch() == 0.5); love.audio.play(gen); out("C gen 1000Hz @0.5 pitch", t) end)
+  at(5.5, function() love.audio.newSource("tone660.wav"):play(); out("D unreferenced 660", t) end)
+  at(5.6, function() collectgarbage("collect") collectgarbage("collect"); check("gc kept source", love.audio.getActiveSourceCount() == 1) end)
+  at(6.0, function() collectgarbage("collect") end)
+  at(7.0, function() clone:setLooping(true); clone:setVolume(0.5); love.audio.play({ clone }, src440)
+                     check("two active", #love.audio.getActiveSources() == 2); out("E loop clone + 440", t) end)
+  at(7.3, function() local p = love.audio.pause(); check("pause all", #p == 2 and clone:isPaused() and src440:isPaused()) end)
+  at(7.6, function() love.audio.play(clone, src440) end)
+  at(8.0, function() love.audio.stop(); check("stop all", love.audio.getActiveSourceCount() == 0 and clone:isStopped()); out("E stop", t) end)
+  at(9.0, function() love.audio.setVolume(0.25); check("master volume", love.audio.getVolume() == 0.25); src440:setLooping(true); src440:play(); out("F 440 vol .25", t) end)
+  at(9.5, function() src440:setVolumeLimits(0, 0.5); src440:setVolume(1) end)
+  at(10.0, function() src440:rewind(); check("rewind keeps playing", src440:isPlaying()) end)
+  at(10.5, function() src440:stop(); love.audio.setVolume(1); s8:play(); out("G 8bit 300", t) end)
+  at(11.5, function()
+    t0.finish()
+  end)
+end
+
+function love.update(dt)
+  t = t + dt
+  while events[1] and t >= events[1].t do
+    table.remove(events, 1).f()
+  end
+end

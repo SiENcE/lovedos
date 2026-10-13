@@ -31,7 +31,7 @@ for t in "${tests[@]}"; do
   cp "$EXE" "$TMP/c/LOVE.EXE"
   cp "$DPMI" "$TMP/c/$dpmiexe"
   cp -r "$t" "$TMP/c/GAME"
-  cp testlib.lua "$TMP/c/GAME/"
+  cp testlib.lua wavgen.lua "$TMP/c/GAME/"
   cat > "$TMP/dosbox.conf" <<CONF
 [dosbox]
 machine=svga_s3
@@ -45,6 +45,7 @@ rate=44100
 sbtype=sb16
 [speaker]
 pcspeaker=false
+$(cat "$t/dosbox.extra" 2>/dev/null)
 [autoexec]
 mount c "$TMP/c"
 c:

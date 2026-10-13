@@ -6,7 +6,7 @@ function love.run()
   if love.load then love.load() end
   return function()
     love.event.pump()
-    for name, a in love.event.poll do
+    for name, a in love.event.poll() do
       if name == "quit" then return a or 0 end
     end
     frames = frames + 1

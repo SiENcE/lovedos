@@ -39,49 +39,6 @@ local function majorVersion(version)
 end
 
 
--- Save directory: "save" or, if an identity is set, "save/<identity>" with
--- the identity shortened to a valid DOS directory name
-local identity
-local saveDir = "save"
-local saveDirMounted = false
-
-local function setSaveDir(dir)
-  if saveDirMounted then
-    love.filesystem.unmount(saveDir)
-    saveDirMounted = false
-  end
-  saveDir = dir
-  -- If the directory doesn't exist yet it is only created (and mounted) when
-  -- something is written to it
-  if love.filesystem.mount(saveDir) then
-    saveDirMounted = true
-    love.filesystem.setWriteDir(saveDir)
-  end
-end
-
-local function ensureSaveDir()
-  if not saveDirMounted then
-    love.filesystem.setWriteDir(saveDir)
-    saveDirMounted = love.filesystem.mount(saveDir) and true or false
-  end
-end
-
-
-function love.filesystem.setIdentity(name)
-  if type(name) ~= "string" then
-    error("bad argument #1 to 'setIdentity' (string expected)", 2)
-  end
-  identity = name
-  local dosname = name:lower():gsub("[^%w_%-]", ""):sub(1, 8)
-  setSaveDir(dosname ~= "" and ("save/" .. dosname) or "save")
-end
-
-
-function love.filesystem.getIdentity()
-  return identity
-end
-
-
 function love.boot()
   -- Init package.path and add filesystem-compatible package loader
   package.path = "?.lua;?/init.lua"
@@ -95,26 +52,32 @@ function love.boot()
     end
   end)
 
-  -- Init event handlers table
+  -- Init event handlers table; like in LÖVE an unknown event is an error
   local function makewrapper(name)
     return function(...)
       if love[name] then return love[name](...) end
     end
   end
-  love.handlers = {
-    ["quit"] = function() end,
-    ["mousepressed"] = makewrapper("mousepressed"),
-    ["mousereleased"] = makewrapper("mousereleased"),
-    ["mousemoved"] = makewrapper("mousemoved"),
-    ["keypressed"] = makewrapper("keypressed"),
-    ["keyreleased"] = makewrapper("keyreleased"),
-    ["textinput"] = makewrapper("textinput"),
-   }
+  love.handlers = setmetatable({ quit = function() end }, {
+    __index = function(t, name) error("Unknown event: " .. tostring(name)) end,
+  })
+  for _, name in ipairs {
+    "mousepressed", "mousereleased", "mousemoved", "wheelmoved",
+    "keypressed", "keyreleased", "textinput", "textedited",
+    "joystickpressed", "joystickreleased", "joystickaxis", "joystickhat",
+    "joystickadded", "joystickremoved", "gamepadpressed", "gamepadreleased",
+    "gamepadaxis", "focus", "mousefocus", "visible", "resize", "lowmemory",
+    "filedropped", "directorydropped", "threaderror", "displayrotated",
+    "touchpressed", "touchreleased", "touchmoved",
+  } do
+    love.handlers[name] = makewrapper(name)
+  end
 
-  -- Try to mount .exe file, then the first argument
+  -- Try to mount .exe file (a packaged game), then the first argument
   for i, v in ipairs { love.argv[1], love.argv[2] } do
     local mounted = love.filesystem.mount(v)
     if mounted then
+      love.filesystem._setSource(v, i == 1)
       break
     end
   end
@@ -128,11 +91,10 @@ function love.boot()
     end
   end
 
-  -- LÖVE 11 uses colors in the range 0 to 1 instead of 0 to 255
-  if majorVersion(conf.version) >= 11 then
-    love.graphics._setColorRange(1)
-  end
-  love.graphics._setColorRange = nil
+  -- LÖVE 11 uses colors in the range 0 to 1 instead of 0 to 255, and some
+  -- ids start at 1 instead of 0
+  love._setCompatibility(majorVersion(conf.version) >= 11 and 11 or 10)
+  love._setCompatibility = nil
 
   -- Remove disabled modules; the Sound Blaster is only initialized if the
   -- audio module is used
@@ -145,19 +107,12 @@ function love.boot()
     love.audio._init()
     love.audio._init = nil
   end
+  if love.joystick then
+    love.joystick._init()
+  end
 
-  -- Init the save directory. love.filesystem.write() is wrapped so that the
-  -- directory is only created when something is written to it
-  if conf.identity then
-    love.filesystem.setIdentity(conf.identity)
-  else
-    setSaveDir(saveDir)
-  end
-  local write = love.filesystem.write
-  love.filesystem.write = function(...)
-    ensureSaveDir()
-    return write(...)
-  end
+  -- Init the save directory
+  love.filesystem._init(conf.identity)
 
   -- Load main.lua or init `nogame` state
   if love.filesystem.isFile("main.lua") then
@@ -194,17 +149,13 @@ function love.run()
   while true do
     -- Handle events
     love.event.pump()
-    while 1 do
-      local name, a,b,c,d = love.event.poll()
-      if not name then
-        break
-      end
+    for name, a, b, c, d, e, f in love.event.poll() do
       if name == "quit" then
         if not love.quit or not love.quit() then
           os.exit(a)
         end
       end
-      love.handlers[name](a, b, c, d)
+      love.handlers[name](a, b, c, d, e, f)
     end
     -- Update
     local dt = 0
@@ -246,12 +197,11 @@ function love.errhand(msg)
   -- Do error main loop
   while true do
     love.event.pump()
-    repeat
-      local name, a = love.event.poll()
+    for name, a in love.event.poll() do
       if name == "keypressed" and a == "escape" then
         return
       end
-    until not name
+    end
     love.graphics.clear()
     love.graphics.print(str, 6, 6)
     love.graphics.present()

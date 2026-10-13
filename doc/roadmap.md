@@ -37,21 +37,21 @@ Status: `[ ]` todo, `[x]` done.
 
 ## Phase 2: worth adding
 
-- [ ] **SpriteBatch** (`love.graphics.newSpriteBatch`): many sprites drawn by
+- [x] **SpriteBatch** (`love.graphics.newSpriteBatch`): many sprites drawn by
       one Lua call; saves the ~0.1ms Lua call overhead per sprite on a 386
-- [ ] **Text** (`love.graphics.newText`): text laid out and rendered once,
+- [x] **Text** (`love.graphics.newText`): text laid out and rendered once,
       drawn as fast as an image in the current color
-- [ ] **ImageFont** (`love.graphics.newImageFont`): bitmap fonts from an image
-- [ ] **love.joystick** for the PC gameport: `getJoysticks`,
+- [x] **ImageFont** (`love.graphics.newImageFont`): bitmap fonts from an image
+- [x] **love.joystick** for the PC gameport: `getJoysticks`,
       `getJoystickCount`, `Joystick` objects and the `joystickpressed`,
       `joystickreleased` and `joystickaxis` callbacks
 - [ ] **Tracker music**: `love.audio.newSource("song.mod")` for MOD files
       (and S3M/XM if a suitable small integer-only player is available)
-- [ ] **love.filesystem (LÖVE 11)**: `getInfo`, `getDirectoryItems`,
+- [x] **love.filesystem (LÖVE 11)**: `getInfo`, `getDirectoryItems`,
       `lines`, `load`, `append`, `remove`, `createDirectory`,
       `getIdentity/setIdentity`, `getSaveDirectory`, `getWorkingDirectory`,
       `getSource`, `getSize`, `getLastModified`, `newFile` / `File` objects
-- [ ] **love.math**: `random`, `randomNormal`, `get/setRandomSeed`,
+- [x] **love.math**: `random`, `randomNormal`, `get/setRandomSeed`,
       `get/setRandomState`, `newRandomGenerator` / `RandomGenerator`,
       `noise`, `triangulate`, `isConvex`, `newBezierCurve` / `BezierCurve`,
       `newTransform` / `Transform`, `colorFromBytes`, `colorToBytes`,
@@ -63,7 +63,7 @@ Status: `[ ]` todo, `[x]` done.
 
 ## Phase 3: small but useful
 
-- [ ] `love.event.push`, `clear`, `wait` (custom events reach
+- [x] `love.event.push`, `clear`, `wait` (custom events reach
       `love.handlers` / `love.<name>` callbacks)
 - [ ] `love.mouse`: `setPosition`, `setX`, `setY`, `setVisible`/`isVisible`
       (software cursor), `setRelativeMode`/`getRelativeMode`,

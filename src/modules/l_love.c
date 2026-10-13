@@ -6,6 +6,7 @@
  */
 
 #include <stdio.h>
+#include "color.h"
 #include "luaobj.h"
 
 #define LOVE_VERSION "0.2.1"
@@ -34,6 +35,18 @@ int l_love_isVersionCompatible(lua_State *L) {
 }
 
 
+/* Set for games written for LÖVE 11 (conf.lua's t.version), which differ
+ * from LÖVE 0.10 in the color range and in sprite batch ids */
+int love_isLove11 = 0;
+
+int l_love_setCompatibility(lua_State *L) {
+  /* Internal: called by boot.lua with the major LÖVE version of the game */
+  love_isLove11 = luaL_checkinteger(L, 1) >= 11;
+  color_setRange(love_isLove11 ? 1 : 255);
+  return 0;
+}
+
+
 static int deprecationOutput = 1;
 
 int l_love_hasDeprecationOutput(lua_State *L) {
@@ -53,6 +66,11 @@ int luaopen_quad(lua_State *L);
 int luaopen_font(lua_State *L);
 int luaopen_source(lua_State *L);
 int luaopen_sounddata(lua_State *L);
+int luaopen_spritebatch(lua_State *L);
+int luaopen_text(lua_State *L);
+int luaopen_randomgenerator(lua_State *L);
+int luaopen_lovemath(lua_State *L);
+int luaopen_joystick(lua_State *L);
 int luaopen_system(lua_State *L);
 int luaopen_event(lua_State *L);
 int luaopen_filesystem(lua_State *L);
@@ -74,6 +92,9 @@ int luaopen_love(lua_State *L) {
     luaopen_font,
     luaopen_source,
     luaopen_sounddata,
+    luaopen_spritebatch,
+    luaopen_text,
+    luaopen_randomgenerator,
     NULL,
   };
   for (i = 0; classes[i]; i++) {
@@ -83,6 +104,7 @@ int luaopen_love(lua_State *L) {
 
   /* Init love module */
   luaL_Reg reg[] = {
+    { "_setCompatibility",    l_love_setCompatibility     },
     { "getVersion",           l_love_getVersion           },
     { "isVersionCompatible",  l_love_isVersionCompatible  },
     { "hasDeprecationOutput", l_love_hasDeprecationOutput },
@@ -99,6 +121,8 @@ int luaopen_love(lua_State *L) {
     { "graphics",   luaopen_graphics    },
     { "audio",      luaopen_audio       },
     { "sound",      luaopen_sound       },
+    { "math",       luaopen_lovemath    },
+    { "joystick",   luaopen_joystick    },
     { "timer",      luaopen_timer       },
     { "keyboard",   luaopen_keyboard    },
     { "mouse",      luaopen_mouse       },

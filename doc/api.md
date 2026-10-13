@@ -10,12 +10,22 @@
 * [love.filesystem](#lovefilesystem)
 * [love.audio](#loveaudio)
 * [love.sound](#lovesound)
+* [love.math](#lovemath)
+* [love.joystick](#lovejoystick)
 * [love.event](#loveevent)
 
 ##### [Objects](#objects-1)
 * [Image](#image)
 * [Quad](#quad)
 * [Font](#font)
+* [SpriteBatch](#spritebatch)
+* [Text](#text)
+* [Joystick](#joystick)
+* [File](#file)
+* [FileData](#filedata)
+* [RandomGenerator](#randomgenerator)
+* [BezierCurve](#beziercurve)
+* [Transform](#transform)
 * [Source](#source)
 * [SoundData](#sounddata)
 
@@ -143,8 +153,9 @@ transformation to their defaults.
 Clears the screen (or canvas) to the color. If no color argument is given
 then the background color is used (see `love.graphics.setBackgroundColor()`).
 
-##### love.graphics.draw(image [, quad] [, x, y, r, sx, sy, ox, oy])
-Draws the `image` to the screen with its origin at the given `x`, `y` position.
+##### love.graphics.draw(drawable [, quad] [, x, y, r, sx, sy, ox, oy])
+Draws the `drawable` -- an Image, a [SpriteBatch](#spritebatch) or a
+[Text](#text) -- to the screen with its origin at the given `x`, `y` position.
 If a `quad` argument is provided then the image is clipped to the provided quad
 when drawn. `r` is the rotation in radians, `sx` and `sy` the horizontal and
 vertical scale (`sy` defaults to `sx`) and `ox`, `oy` the origin within the
@@ -217,6 +228,28 @@ Creates and returns a new quad.
 ##### love.graphics.newFont([filename ,] ptsize)
 Creates and returns a new font. `filename` should be the name of a ttf file and
 `ptsize` its size. If no `filename` is provided the built in font is used.
+
+##### love.graphics.setNewFont([filename ,] ptsize)
+Creates a font like `love.graphics.newFont()`, sets it as the current font and
+returns it.
+
+##### love.graphics.newImageFont(image, glyphs [, extraspacing])
+Creates and returns a font from an image (or the filename of one) containing
+the characters of the `glyphs` string side by side. The glyphs are separated
+by columns whose top pixel has the color of the image's top left pixel;
+pixels of this color within glyphs are transparent. `extraspacing` adds
+pixels between characters. Unlike other fonts the glyphs keep their own colors
+instead of being drawn in the current color. Only ASCII characters are
+supported; other characters in `glyphs` skip their glyph.
+
+##### love.graphics.newSpriteBatch(image [, maxsprites])
+Creates and returns a new [SpriteBatch](#spritebatch) for drawing many copies
+(or parts) of `image` with a single call. `maxsprites` is the initial size of
+the buffer, which grows as needed.
+
+##### love.graphics.newText(font [, text])
+Creates and returns a new [Text](#text) object, text which is laid out and
+rendered once and can then be drawn quickly.
 
 ##### love.graphics.present()
 Flips the current screen buffer with the displayed screen buffer. This is
@@ -304,6 +337,74 @@ Reads and returns the contents of the file at `filename`.
 
 ##### love.filesystem.write(filename, string)
 Writes `string` to the given `filename` in the game's save directory.
+
+##### love.filesystem.append(filename, string [, size])
+Appends `string` (or its first `size` bytes) to the given `filename` in the
+save directory. Returns `true`, or `false` and an error message.
+
+##### love.filesystem.remove(name)
+Removes a file or an empty directory from the save directory. Returns `true`
+on success.
+
+##### love.filesystem.createDirectory(name)
+Creates a directory (and its parent directories) in the save directory.
+Returns `true` on success.
+
+##### love.filesystem.getInfo(path [, filtertype] [, info])
+Returns a table with the fields `type` (`"file"` or `"directory"`), `size`
+and `modtime` (seconds since the epoch), or `nil` if the path doesn't exist.
+If `filtertype` is given, `nil` is also returned if the path is of another
+type. If an `info` table is given it is filled and returned instead of a new
+table.
+
+##### love.filesystem.getDirectoryItems(dir)
+Returns a table with the names of the files and directories in `dir`, in all
+mounted directories and archives.
+
+##### love.filesystem.lines(filename)
+Returns an iterator over the lines of a file.
+
+##### love.filesystem.load(filename)
+Loads a Lua file and returns it as a function (without running it), or `nil`
+and an error message.
+
+##### love.filesystem.getSize(filename)
+##### love.filesystem.getLastModified(filename)
+Return the size of a file in bytes and the time it was last modified (LÖVE
+0.10; see `love.filesystem.getInfo()`).
+
+##### love.filesystem.getRealDirectory(filename)
+Returns the mounted directory or archive which contains the file.
+
+##### love.filesystem.getSaveDirectory()
+Returns the full path of the save directory.
+
+##### love.filesystem.getWorkingDirectory()
+Returns the current working directory. `getUserDirectory()` and
+`getAppdataDirectory()` return the same.
+
+##### love.filesystem.getSource()
+Returns the path of the game: its directory, archive or packaged exe.
+
+##### love.filesystem.getSourceBaseDirectory()
+Returns the directory containing the game's source.
+
+##### love.filesystem.isFused()
+Returns `true` if the game is packaged into the exe (see
+[packaging](packaging.md)).
+
+##### love.filesystem.newFile(filename [, mode])
+Returns a new [File](#file); if `mode` (`"r"`, `"w"` or `"a"`) is given the file
+is opened, and `nil` and an error message are returned if this fails.
+
+##### love.filesystem.newFileData(filename)
+##### love.filesystem.newFileData(contents, name)
+Returns a new [FileData](#filedata) with the contents of a file, or of the
+given string.
+
+##### love.filesystem.getRequirePath()
+##### love.filesystem.setRequirePath(paths)
+Gets and sets the paths searched by `require`, by default `"?.lua;?/init.lua"`.
 
 
 ### love.audio
@@ -413,9 +514,96 @@ bit depth -- `8` or `16` (the default) -- and `channels` is either `1` (mono)
 or `2` (stereo, the default).
 
 
+### love.math
+Provides random numbers, noise and geometry functions.
+
+##### love.math.random([[min,] max])
+Returns a random number from the default [RandomGenerator](#randomgenerator):
+without arguments a number between `0` and `1`, otherwise an integer between
+`min` (by default `1`) and `max`. The generator is the same as LÖVE's, so the
+same seed gives the same numbers; it is seeded from the time at startup.
+
+##### love.math.randomNormal([stddev [, mean]])
+Returns a normally distributed random number.
+
+##### love.math.setRandomSeed(seed)
+##### love.math.setRandomSeed(low, high)
+##### love.math.getRandomSeed()
+Sets and gets the seed of the default generator; `getRandomSeed()` returns
+its low and high 32 bits.
+
+##### love.math.getRandomState()
+##### love.math.setRandomState(state)
+Gets and sets the state of the default generator as a string.
+
+##### love.math.newRandomGenerator([seed])
+Returns a new [RandomGenerator](#randomgenerator).
+
+##### love.math.noise(x [, y [, z [, w]]])
+Returns simplex (1 and 2 dimensions) or Perlin (3 and 4 dimensions) noise in
+the range `0` to `1`.
+
+##### love.math.isConvex(vertices)
+Returns `true` if the polygon (`x1, y1, x2, y2, ...` or a table of them) is
+convex.
+
+##### love.math.triangulate(vertices)
+Splits a simple polygon into triangles; returns a table of triangles, each a
+table `{x1, y1, x2, y2, x3, y3}`.
+
+##### love.math.newBezierCurve(vertices)
+Returns a new [BezierCurve](#beziercurve) with the given control points.
+
+##### love.math.newTransform([x, y, angle, sx, sy, ox, oy, kx, ky])
+Returns a new [Transform](#transform).
+
+##### love.math.colorToBytes(r, g, b [, a])
+##### love.math.colorFromBytes(r, g, b [, a])
+Convert colors between the ranges `0` to `1` and `0` to `255`.
+
+##### love.math.gammaToLinear(r, g, b)
+##### love.math.linearToGamma(r, g, b)
+Convert colors between sRGB and linear RGB.
+
+
+### love.joystick
+Joysticks connected to the PC gameport: up to two joysticks with two axes and
+two buttons each, or one joystick with four buttons. Joysticks are detected
+at startup, when they should be centered; their range is calibrated as they
+are moved. If a joystick is found the gameport is read once per frame, which
+takes up to about 1.5ms.
+
+##### love.joystick.getJoysticks()
+Returns a table of the connected [Joysticks](#joystick).
+
+##### love.joystick.getJoystickCount()
+Returns the number of connected joysticks.
+
+`setGamepadMapping()`, `loadGamepadMappings()`, `saveGamepadMappings()` and
+`getGamepadMappingString()` exist for compatibility and have no effect.
+
+
 ### love.event
 ##### love.event.quit([status])
 Pushes the `quit` event with the given `status`. `status` is `0` by default.
+
+##### love.event.push(name, ...)
+Adds an event to the queue. The default `love.run()` calls
+`love.handlers[name](...)` for each event; add a function to `love.handlers`
+to handle custom events.
+
+##### love.event.poll()
+Returns an iterator over the queued events:
+`for name, a, b, c, d, e, f in love.event.poll() do ... end`.
+
+##### love.event.pump()
+Adds the events from the keyboard, mouse and joysticks to the queue.
+
+##### love.event.wait()
+Waits for an event and returns it.
+
+##### love.event.clear()
+Removes all queued events.
 
 
 ## Objects
@@ -648,6 +836,160 @@ Returns the raw audio data as a string.
 Returns a copy of the sound data.
 
 
+### SpriteBatch
+Many sprites drawn with a single call to `love.graphics.draw()`, which is much
+faster than drawing them separately: on a 386 most of the time of drawing a
+small image is spent calling it from Lua. Sprite ids start at `0`, or at `1`
+for games written for LÖVE 11 (see [conf.lua](#configuration-conflua)).
+
+##### SpriteBatch:add([quad,] x, y, r, sx, sy, ox, oy)
+Adds a sprite: the image (or the part of it given by `quad`) with the same
+transformation arguments as `love.graphics.draw()`. Returns the sprite's id.
+
+##### SpriteBatch:set(id, [quad,] x, y, r, sx, sy, ox, oy)
+Changes the sprite with the given id.
+
+##### SpriteBatch:clear()
+Removes all sprites.
+
+##### SpriteBatch:getCount()
+Returns the number of sprites.
+
+##### SpriteBatch:getBufferSize()
+##### SpriteBatch:setBufferSize(size)
+Gets and sets the number of sprites which fit without growing the buffer.
+
+##### SpriteBatch:getTexture()
+##### SpriteBatch:setTexture(image)
+Gets and sets the image used by the sprites.
+
+##### SpriteBatch:setDrawRange([start, count])
+Only draws `count` sprites starting with the `start`th one (counted from `1`).
+Without arguments all sprites are drawn.
+
+##### SpriteBatch:getDrawRange()
+Returns the first sprite and the number of sprites which are drawn.
+
+Sprite batches are drawn with `love.graphics.draw(spritebatch, x, y)`; they
+can't be rotated or scaled as a whole (their sprites can).
+`SpriteBatch:setColor()` and `flush()` have no effect.
+
+
+### Text
+Text which is laid out and rendered once; drawing it costs about as much as
+drawing an image of the same size and is several times faster than printing
+the text. Like printed text it is drawn in the current color.
+
+##### Text:set(text)
+Replaces the text. `text` can also be a table of colors and strings as in
+LÖVE 11, whose colors are ignored.
+
+##### Text:setf(text, wraplimit, align)
+Replaces the text with text wrapped and aligned as by
+`love.graphics.printf()`.
+
+##### Text:add(text [, x, y])
+##### Text:addf(text, wraplimit, align [, x, y])
+Adds text at the position `x`, `y`; returns its index.
+
+##### Text:clear()
+Removes all text.
+
+##### Text:getWidth()
+##### Text:getHeight()
+##### Text:getDimensions()
+Return the size of the text in pixels.
+
+##### Text:getFont()
+##### Text:setFont(font)
+Gets and sets the font used by the text.
+
+
+### Joystick
+A gameport joystick. `Joystick:getAxis(i)` returns the position of axis `i`
+(`1` horizontal, `2` vertical) from `-1` to `1`, `getAxes()` both positions,
+`isDown(button, ...)` whether any of the buttons is pressed,
+`getAxisCount()`, `getButtonCount()`, `getName()`, `getID()` and
+`isConnected()` describe it. Hats, gamepad functions and vibration are not
+supported by gameport joysticks: `getHatCount()` returns `0`, `isGamepad()`
+and `isVibrationSupported()` return `false`.
+
+
+### File
+A file opened with `love.filesystem.newFile()`. Files opened for reading
+(`"r"`) are read into memory, which also works for files in archives; files
+opened for writing (`"w"`) or appending (`"a"`) are written to the save
+directory.
+
+##### File:open(mode)
+##### File:close()
+Open and close the file.
+
+##### File:read([bytes])
+Reads `bytes` bytes (by default the rest of the file); returns the data and
+the number of bytes read.
+
+##### File:write(data [, size])
+Writes `data`, or its first `size` bytes.
+
+##### File:lines()
+Returns an iterator over the remaining lines.
+
+##### File:seek(position)
+##### File:tell()
+Set and get the position in bytes.
+
+##### File:getSize()
+##### File:isEOF()
+##### File:isOpen()
+##### File:getMode()
+##### File:getFilename()
+Return the size, whether the end was reached, whether the file is open, its
+mode (`"c"` when closed) and its name.
+
+
+### FileData
+The contents of a file in memory, created with `love.filesystem.newFileData()`.
+`FileData:getString()`, `getSize()`, `getFilename()` and `getExtension()`
+return its contents, size, name and extension.
+
+
+### RandomGenerator
+An independent random number generator, created with
+`love.math.newRandomGenerator()`. It has the methods `random()`,
+`randomNormal()`, `setSeed()`, `getSeed()`, `setState()`, `getState()` which
+work like the `love.math` functions of the same names, and `clone()`.
+
+
+### BezierCurve
+A Bézier curve, created with `love.math.newBezierCurve()`.
+
+* `BezierCurve:evaluate(t)` returns the point at `t` (`0` to `1`)
+* `BezierCurve:render([depth])` returns the curve as points
+  `{x1, y1, x2, y2, ...}` for `love.graphics.line()`; it has `2^depth + 1`
+  points (`depth` is `5` by default)
+* `BezierCurve:renderSegment(t1, t2 [, depth])` and `getSegment(t1, t2)`
+  work on the part from `t1` to `t2`
+* `BezierCurve:getDerivative()` returns the derivative as a new curve
+* `getControlPoint(i)`, `setControlPoint(i, x, y)`,
+  `insertControlPoint(x, y [, i])`, `removeControlPoint(i)`,
+  `getControlPointCount()` and `getDegree()` edit the control points (negative
+  indices count from the end)
+* `translate(dx, dy)`, `rotate(angle [, ox, oy])` and `scale(s [, ox, oy])`
+  transform the curve
+
+
+### Transform
+A 2D transformation, created with `love.math.newTransform()`. It has the
+methods `translate(x, y)`, `rotate(angle)`, `scale(sx [, sy])`,
+`shear(kx, ky)`, `apply(other)`, `setTransformation(...)` (with the same
+arguments as `love.math.newTransform()`), `transformPoint(x, y)`,
+`inverseTransformPoint(x, y)`, `inverse()`, `clone()`, `reset()`,
+`getMatrix()` and `setMatrix(...)`; transforms can be multiplied with `*`.
+Transforms are only used for calculations: `love.graphics` can only translate
+the coordinate system (see `love.graphics.translate()`).
+
+
 ## Callbacks
 ##### love.load(args)
 Called when LoveDOS is started. `args` is a table containing the command line
@@ -682,6 +1024,16 @@ position, `dx` and `dy` is the amount moved relative to the last mouse position.
 ##### love.mousepressed(x, y, button)
 Called when the user presses a mouse button. `x` and `y` are the mouse's current
 position. `button` is the value `1` (left), `2` (right) or `3` (middle).
+
+##### love.joystickadded(joystick)
+Called at startup for each joystick which is found.
+
+##### love.joystickpressed(joystick, button)
+##### love.joystickreleased(joystick, button)
+Called when a joystick button is pressed or released.
+
+##### love.joystickaxis(joystick, axis, value)
+Called when a joystick axis moves; `value` is from `-1` to `1`.
 
 ##### love.mousereleased(x, y, button)
 Called when the user releases a mouse button. `x` and `y` are the mouse's

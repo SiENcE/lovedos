@@ -24,6 +24,20 @@ enum {
   FILESYSTEM_EMKDIRFAIL   = -8
 };
 
+typedef struct {
+  int type;       /* FILESYSTEM_TREG or FILESYSTEM_TDIR */
+  long size;
+  long modtime;   /* Seconds since the epoch, -1 if unknown */
+} filesystem_info_t;
+
+typedef void (*filesystem_listCallback)(void *udata, const char *name);
+
+enum {
+  FILESYSTEM_TNONE,
+  FILESYSTEM_TREG,
+  FILESYSTEM_TDIR,
+};
+
 const char* filesystem_strerror(int err);
 void filesystem_deinit(void);
 int filesystem_mount(const char *path);
@@ -35,5 +49,12 @@ void* filesystem_read(const char *filename, int *size);
 void filesystem_free(void *ptr);
 int filesystem_setWriteDir(const char *path);
 int filesystem_write(const char *filename, const void *data, int size);
+int filesystem_append(const char *filename, const void *data, int size);
+int filesystem_remove(const char *filename);
+int filesystem_createDirectory(const char *path);
+int filesystem_getInfo(const char *filename, filesystem_info_t *info);
+const char *filesystem_getRealDirectory(const char *filename);
+void filesystem_list(const char *dir, filesystem_listCallback cb, void *udata);
+const char *filesystem_getWriteDir(void);
 
 #endif

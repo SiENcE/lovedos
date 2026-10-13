@@ -53,7 +53,7 @@ function love.load()
   t.check("deprecation output", love.hasDeprecationOutput() == true)
   love.setDeprecationOutput(false)
   t.check("set deprecation output", love.hasDeprecationOutput() == false)
-  t.check("internal hooks removed", love.graphics._setColorRange == nil)
+  t.check("internal hooks removed", love._setCompatibility == nil)
   t.check("timer.step returns dt", type(love.timer.step()) == "number")
   t.finish()
 end

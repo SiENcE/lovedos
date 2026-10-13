@@ -108,6 +108,58 @@ const char *font_initEmbedded(font_t *self, int ptsize) {
 }
 
 
+const char *font_initImage(font_t *self, image_t *src, const char *glyphs,
+                           int spacing) {
+  /* Creates a font from an image containing the glyphs in the order of the
+   * `glyphs` string, separated by columns whose top pixel has the color of
+   * the image's top left pixel (as in LÖVE). Only ASCII characters are
+   * supported; other (UTF-8 encoded) characters skip their glyph */
+  const unsigned char *p = (const unsigned char*) glyphs;
+  pixel_t spacer;
+  int x = 0, i, w = src->width, h = src->height;
+
+  memset(self, 0, sizeof(*self));
+  if (w <= 0 || h <= 0) {
+    return "image font has no pixels";
+  }
+  image_initBlank(&self->image, w, h);
+  memcpy(self->image.data, src->data, w * h);
+  memcpy(self->image.mask, src->mask, w * h);
+  spacer = src->data[0];
+
+  while (*p) {
+    /* Next glyph: skip separator columns, then take the columns up to the
+     * next separator */
+    int c = *p, start, end;
+    if (c >= 0xf0) p += 4; else if (c >= 0xe0) p += 3;
+    else if (c >= 0xc0) p += 2; else p += 1;
+    while (x < w && src->data[x] == spacer) x++;
+    start = x;
+    while (x < w && src->data[x] != spacer) x++;
+    end = x;
+    if (start == end) break;
+    if (c < 128) {
+      stbtt_bakedchar *g = &self->glyphs[c];
+      g->x0 = start; g->x1 = end; g->y0 = 0; g->y1 = h;
+      g->xoff = g->yoff = 0;
+      g->xadvance = end - start + spacing;
+      self->advance[c] = end - start + spacing;
+    }
+  }
+
+  /* Pixels with the separator color are transparent */
+  for (i = 0; i < w * h; i++) {
+    if (self->image.data[i] == spacer) {
+      self->image.data[i] = 0;
+      self->image.mask[i] = 0xff;
+    }
+  }
+  self->height = h;
+  self->colored = 1;
+  return NULL;
+}
+
+
 void font_deinit(font_t *self) {
   image_deinit(&self->image);
 }
@@ -128,7 +180,7 @@ void font_blit(font_t *self, pixel_t *buf, int bufw, int bufh,
 
   int oldBlendMode = image_blendMode;
   int oldFlip = image_flip;
-  image_blendMode = IMAGE_COLOR;
+  image_blendMode = self->colored ? IMAGE_NORMAL : IMAGE_COLOR;
   image_flip = 0;
 
   while (p < end) {
@@ -211,4 +263,98 @@ int font_wrap(font_t *self, const char *str, int limit,
     p = pend + 1;
   }
   return max;
+}
+
+
+typedef struct {
+  font_t *font;
+  int x, y, limit, align;
+  font_spanCallback callback;
+  void *udata;
+} layout_t;
+
+
+static void layoutLine(void *udata, const char *str, int len, int width,
+                       int last) {
+  layout_t *p = udata;
+  int x = p->x;
+
+  if (p->align == FONT_ALIGN_JUSTIFY && !last) {
+    /* Spread the remaining space over the gaps between words */
+    const char *s = str, *end = str + len, *q;
+    int gaps = 0, extra = p->limit - width, i = 0;
+    for (q = str; q < end; q++) {
+      if (*q == ' ' && q > str && q[-1] != ' ') gaps++;
+    }
+    while (s < end) {
+      for (q = s; q < end && *q != ' '; q++);
+      if (q > s) p->callback(p->udata, s, q - s, x, p->y);
+      x += font_getWidth(p->font, s, q - s);
+      for (s = q; q < end && *q == ' '; q++);
+      x += font_getWidth(p->font, s, q - s);
+      if (q < end && s > str && gaps > 0) {
+        x += extra / gaps + (i++ < extra % gaps);
+      }
+      s = q;
+    }
+  } else {
+    switch (p->align) {
+      case FONT_ALIGN_CENTER : x += (p->limit - width) / 2; break;
+      case FONT_ALIGN_RIGHT  : x += p->limit - width;       break;
+    }
+    if (len > 0) p->callback(p->udata, str, len, x, p->y);
+  }
+  p->y += p->font->height;
+}
+
+
+void font_layout(font_t *self, const char *str, int len, int x, int y,
+                 int limit, int align, font_spanCallback callback,
+                 void *udata) {
+  /* Lays out text for drawing, calling `callback` with each span of text
+   * and its position. If `limit` is negative the text is not wrapped (only
+   * split at newlines) and `align` is ignored. `len` is only used when not
+   * wrapping; wrapped text must be NUL terminated */
+  layout_t p;
+  if (limit < 0) {
+    if (len < 0) len = strlen(str);
+    callback(udata, str, len, x, y);
+    return;
+  }
+  p.font = self;
+  p.x = x;
+  p.y = y;
+  p.limit = limit;
+  p.align = align;
+  p.callback = callback;
+  p.udata = udata;
+  font_wrap(self, str, limit, layoutLine, &p);
+}
+
+
+void font_getBounds(font_t *self, const char *str, int len, int x, int y,
+                    image_rect_t *rect) {
+  /* Grows `rect` (x1 and y1 exclusive) to include the glyphs of the text as
+   * drawn by font_blit() at `x`, `y` */
+  const char *p = str;
+  const char *end = str + (len < 0 ? (int) strlen(str) : len);
+  int cx = x, cy = y;
+  for (; p < end; p++) {
+    if (*p == '\n') {
+      cx = x;
+      cy += self->height;
+    } else {
+      int c = *p & 127;
+      stbtt_bakedchar *g = &self->glyphs[c];
+      int gx = cx + self->xoff[c], gy = cy + self->yoff[c];
+      int gw = g->x1 - g->x0, gh = g->y1 - g->y0;
+      if (gw > 0 && gh > 0) {
+        if (gx < rect->x0) rect->x0 = gx;
+        if (gy < rect->y0) rect->y0 = gy;
+        if (gx + gw > rect->x1) rect->x1 = gx + gw;
+        if (gy + gh > rect->y1) rect->y1 = gy + gh;
+      }
+      cx += self->advance[c];
+    }
+  }
 }
