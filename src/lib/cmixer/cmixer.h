@@ -25,6 +25,7 @@ typedef struct {
   const char *msg;
   cm_Int16 *buffer;
   int length;
+  int position;
 } cm_Event;
 
 typedef void (*cm_EventHandler)(cm_Event *e);
@@ -48,7 +49,8 @@ enum {
   CM_EVENT_UNLOCK,
   CM_EVENT_DESTROY,
   CM_EVENT_SAMPLES,
-  CM_EVENT_REWIND
+  CM_EVENT_REWIND,
+  CM_EVENT_SEEK
 };
 
 
@@ -64,6 +66,8 @@ cm_Source* cm_new_source_from_mem(void *data, int size);
 void cm_destroy_source(cm_Source *src);
 double cm_get_length(cm_Source *src);
 double cm_get_position(cm_Source *src);
+int cm_tell(cm_Source *src);
+void cm_seek(cm_Source *src, int frame);
 int cm_get_state(cm_Source *src);
 void cm_set_gain(cm_Source *src, double gain);
 void cm_set_pan(cm_Source *src, double pan);

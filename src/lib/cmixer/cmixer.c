@@ -160,7 +160,7 @@ static void process_source(cm_Source *src, int len) {
     frame = src->position >> FX_BITS;
 
     /* Fill buffer if required */
-    if (frame + 3 >= src->nextfill) {
+    while (frame + 3 >= src->nextfill) {
       fill_source_buffer(src, (src->nextfill*2) & BUFFER_MASK, BUFFER_SIZE/2);
       src->nextfill += BUFFER_SIZE / 4;
     }
@@ -384,6 +384,7 @@ void cm_destroy_source(cm_Source *src) {
         *s = src->next;
         break;
       }
+      s = &(*s)->next;
     }
   }
   unlock();
@@ -400,7 +401,38 @@ double cm_get_length(cm_Source *src) {
 
 
 double cm_get_position(cm_Source *src) {
-  return ((src->position >> FX_BITS) % src->length) / (double) src->samplerate;
+  return cm_tell(src) / (double) src->samplerate;
+}
+
+
+int cm_tell(cm_Source *src) {
+  /* Returns the current playhead position in frames */
+  if (src->rewind || src->length <= 0) {
+    return 0;
+  }
+  return (src->position >> FX_BITS) % src->length;
+}
+
+
+void cm_seek(cm_Source *src, int frame) {
+  /* Moves the playhead to the given frame. The internal buffer is always
+  ** filled in blocks of BUFFER_SIZE / 4 frames, so the stream is notified
+  ** with a CM_EVENT_SEEK event to seek to the start of the block containing
+  ** `frame`; the event's `position` field holds that block's first frame */
+  cm_Event e;
+  int block;
+  frame = CLAMP(frame, 0, src->length);
+  block = frame - frame % (BUFFER_SIZE / 4);
+  lock();
+  e.type = CM_EVENT_SEEK;
+  e.udata = src->udata;
+  e.position = block;
+  src->handler(&e);
+  src->position = (cm_Int64) frame << FX_BITS;
+  src->end = src->length;
+  src->nextfill = block;
+  src->rewind = 0;
+  unlock();
 }
 
 
@@ -433,7 +465,9 @@ void cm_set_pan(cm_Source *src, double pan) {
 
 void cm_set_pitch(cm_Source *src, double pitch) {
   double rate = src->samplerate / (double) cmixer.samplerate * pitch;
-  src->rate = FX_FROM_FLOAT(rate);
+  /* A rate of 0 would divide by zero when processing; a rate much larger
+  ** than the internal buffer would read samples that weren't filled yet */
+  src->rate = CLAMP(FX_FROM_FLOAT(rate), 1, (BUFFER_SIZE / 8) << FX_BITS);
 }
 
 
